@@ -113,10 +113,8 @@ def duplicate_identifier(db: Session, field: str, value: str | None, exclude_id:
 
 
 @app.get("/", response_class=HTMLResponse)
-def home(request: Request, db: Annotated[Session, Depends(get_db)]):
-    if not request.session.get("user_id"):
-        return redirect("/auth/login")
-    return dashboard(request, db)
+def home(request: Request, db: Annotated[Session, Depends(get_db)], user: Annotated[User, Depends(get_current_user)]):
+    return dashboard(request, db, user)
 
 
 @app.get("/auth/login", response_class=HTMLResponse)
