@@ -559,7 +559,7 @@ async def import_excel(
         db.add(StoredFile(owner_id=user.id, file_type="upload", original_name=file.filename, stored_name=stored_name, path=str(path)))
         db.commit()
         created = import_people_from_xlsx(db, path, target_owner, user)
-        return redirect("/dashboard", message=f"导入完成：{created} 条")
+        return redirect(f"/me?period={current_period()}&message=导入完成：{created} 条")
     except Exception as exc:
         logger.exception("上传导入失败")
         return redirect("/imports", error=str(exc))
