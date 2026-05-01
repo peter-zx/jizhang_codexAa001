@@ -169,6 +169,16 @@ def import_people_from_xlsx(db: Session, path: Path, owner: User, operator: User
                 if existing:
                     logger.info("跳过重复残疾证ID：%s", payload["disability_cert_id"])
                     continue
+            # 检查同一分销商、同姓名、同结算期是否已存在
+            existing = db.query(Person).filter(
+                Person.owner_id == owner.id,
+                Person.name == payload["name"],
+                Person.settlement_period == payload["settlement_period"]
+            ).first()
+            if existing:
+                logger.info("跳过重复人员：%s @ %s（分销商%s）", payload["name"], payload["settlement_period"], owner.username)
+                continue
+
             db.add(Person(owner_id=owner.id, **payload))
             created += 1
         db.commit()
