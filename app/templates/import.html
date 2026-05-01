@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="form-head">
+  <h2>导入 Excel</h2>
+  <p>上传统一表格，系统会按结算月份生成本月记录。</p>
+</section>
+<section class="settings-card">
+  <h3>导入模板</h3>
+  <p>模板第一行就是全部表头字段，字段顺序与新增页面分类一致。</p>
+  <a class="download-button" href="/template.xlsx" download="人员导入模板.xlsx">下载模板</a>
+</section>
+<form method="post" action="/imports" enctype="multipart/form-data" class="mobile-form">
+  {% if user.role == "grandmaster" %}
+  <label>导入到分销商
+    <select name="owner_id" required>
+      {% for distributor in distributors %}
+      <option value="{{ distributor.id }}">{{ distributor.display_name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  {% endif %}
+  <label>选择 .xlsx 文件<input name="file" type="file" accept=".xlsx" required></label>
+  <button type="submit">上传并导入</button>
+</form>
+{% endblock %}

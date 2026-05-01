@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero-card">
+  <div class="profile-card">
+    <h2>导出中心</h2>
+    <p>{{ period }} · 先选字段，再选人员，系统生成缓存文件后提供下载。</p>
+  </div>
+</section>
+
+<form method="get" id="export-center-form">
+  <input type="hidden" name="period" value="{{ period }}">
+  <input type="hidden" name="fields" value="serial_no">
+
+  <section class="settings-card">
+    <h3>1. 选择导出字段</h3>
+    <div class="fixed-field">固定导出：序号</div>
+
+    <div class="field-group" data-field-group>
+      <label class="group-toggle"><input type="checkbox" data-group-toggle="personal">个人信息类</label>
+      <div class="export-options compact-fields">
+        {% for field, label in export_fields %}
+        {% if field in ["name","age","gender","contact_phone","sfid","sfid_expires_at","disability_cert_id","cert_issued_at","household_address","household_type","emergency_contact","emergency_phone","emergency_relation","disability_type1","disability_level1","disability_type2","disability_level2","disability_part","disability_reason","education","marital_status","bank_card_id","bank_name"] %}
+        <label>
+          <input type="checkbox" name="fields" value="{{ field }}" data-group="personal" {% if field in default_export_fields %}checked{% endif %}>
+          <span>{{ label }}</span>
+        </label>
+        {% endif %}
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="field-group" data-field-group>
+      <label class="group-toggle"><input type="checkbox" data-group-toggle="bank">银行信息类</label>
+      <div class="export-options compact-fields">
+        {% for field, label in export_fields %}
+        {% if field in ["salary_card","payroll_type","gross_pay","return_amount"] %}
+        <label>
+          <input type="checkbox" name="fields" value="{{ field }}" data-group="bank">
+          <span>{{ label }}</span>
+        </label>
+        {% endif %}
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="field-group" data-field-group>
+      <label class="group-toggle"><input type="checkbox" data-group-toggle="other">其他类</label>
+      <div class="export-options compact-fields">
+        {% for field, label in export_fields %}
+        {% if field in ["work_area","placement_period","settlement_period","employment_status","entry_date","channel","note","owner","monthly_confirmed","confirmed_at"] %}
+        <label>
+          <input type="checkbox" name="fields" value="{{ field }}" data-group="other">
+          <span>{{ label }}</span>
+        </label>
+        {% endif %}
+        {% endfor %}
+      </div>
+    </div>
+  </section>
+
+  <section class="settings-card">
+    <h3>2. 选择人员</h3>
+    <div class="export-state" id="export-state">已选 0 人 · 已选 0 个字段</div>
+    <div class="export-actions-row">
+      <button type="button" class="secondary-btn" id="select-all-people">全选人员</button>
+      <button type="button" class="secondary-btn" id="clear-people">清空选择</button>
+    </div>
+    <div class="export-people-matrix">
+      {% for item in people %}
+      <label class="export-person-tile">
+        <input type="checkbox" name="person_ids" value="{{ item.id }}">
+        <span>{{ item.name }}</span>
+      </label>
+      {% else %}
+      <div class="empty-state"><h3>暂无资料</h3><p>先新增或导入人员。</p></div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="settings-card export-workbench">
+    <h3>3. 处理数据并下载</h3>
+    <p>点击后系统会先生成文件，再在这里显示下载入口。</p>
+    <div class="export-error" id="export-error" hidden></div>
+    {% if download_file %}
+    <div class="download-ready">
+      <h3>导出文件已生成</h3>
+      <p>{{ download_file.stored_name }}</p>
+      <a href="/files/{{ download_file.id }}" download>当前窗口下载</a>
+      <p class="file-path">本地文件路径：{{ download_path }}</p>
+    </div>
+    {% endif %}
+    <div class="export-buttons">
+      <button type="submit" id="export-xlsx" formaction="/exports/create" disabled>处理并导出表格</button>
+      <button type="submit" id="export-word" formaction="/exports/word/create" disabled>处理并导出 Word</button>
+    </div>
+  </section>
+</form>
+
+<script>
+  (function () {
+    const form = document.getElementById("export-center-form");
+    const people = Array.from(form.querySelectorAll("input[name=person_ids]"));
+    const fields = Array.from(form.querySelectorAll("input[name=fields]"));
+    const state = document.getElementById("export-state");
+    const error = document.getElementById("export-error");
+    const buttons = [document.getElementById("export-xlsx"), document.getElementById("export-word")];
+
+    function counts() {
+      return {
+        people: people.filter(item => item.checked).length,
+        fields: fields.filter(item => item.checked).length,
+      };
+    }
+
+    function syncGroupToggles() {
+      document.querySelectorAll("[data-group-toggle]").forEach(toggle => {
+        const group = toggle.dataset.groupToggle;
+        const groupFields = fields.filter(item => item.dataset.group === group);
+        toggle.checked = groupFields.length > 0 && groupFields.every(item => item.checked);
+      });
+    }
+
+    function update() {
+      const count = counts();
+      state.textContent = `已选 ${count.people} 人 · 已选 ${count.fields} 个字段`;
+      buttons.forEach(button => button.disabled = count.people === 0);
+      syncGroupToggles();
+      if (count.people > 0) error.hidden = true;
+    }
+
+    people.forEach(item => item.addEventListener("change", update));
+    fields.forEach(item => item.addEventListener("change", update));
+    document.querySelectorAll("[data-group-toggle]").forEach(toggle => {
+      toggle.addEventListener("change", () => {
+        const group = toggle.dataset.groupToggle;
+        fields.filter(item => item.dataset.group === group).forEach(item => item.checked = toggle.checked);
+        update();
+      });
+    });
+    document.getElementById("select-all-people").addEventListener("click", () => {
+      people.forEach(item => item.checked = true);
+      update();
+    });
+    document.getElementById("clear-people").addEventListener("click", () => {
+      people.forEach(item => item.checked = false);
+      update();
+    });
+    form.addEventListener("submit", event => {
+      const count = counts();
+      if (count.people === 0) {
+        event.preventDefault();
+        error.textContent = "请先勾选需要导出的人员";
+        error.hidden = false;
+        return;
+      }
+      buttons.forEach(button => button.disabled = true);
+      state.textContent = `正在处理数据：${count.people} 人 · ${count.fields} 个字段`;
+    });
+    update();
+  })();
+</script>
+{% endblock %}

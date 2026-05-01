@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="form-head">
+  <h2>{{ "编辑人员" if person else "新增人员" }}</h2>
+  <p>姓名必填；SFid 和残疾证ID 分别全局查重，任意渠道商已存在都会提醒。</p>
+</section>
+
+<form method="post" action="{{ '/people/' ~ person.id if person else '/people' }}" class="compact-form">
+  <section class="form-section">
+    <h3>基础身份</h3>
+    <div class="form-grid-2">
+      {% if user.role == "grandmaster" %}
+      <label>归属分销商
+        <select name="owner_id" required>
+          {% for distributor in distributors %}
+          <option value="{{ distributor.id }}" {% if person and person.owner_id == distributor.id %}selected{% endif %}>{{ distributor.display_name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      {% endif %}
+      <label>序号<input name="serial_no" value="{{ person.serial_no if person else '' }}"></label>
+      <label>姓名<input name="name" required value="{{ person.name if person else '' }}"></label>
+      <label>年龄<input name="age" value="{{ person.age if person else '' }}"></label>
+      <label>性别<input name="gender" value="{{ person.gender if person else '' }}"></label>
+      <label>联系方式<input name="contact_phone" value="{{ person.contact_phone if person else '' }}"></label>
+      <label>结算所属期<input type="month" name="settlement_period" value="{{ person.settlement_period if person else period }}" required></label>
+      <label>在职离职
+        <select name="employment_status">
+          <option value="在职" {% if not person or person.employment_status == "在职" %}selected{% endif %}>在职</option>
+          <option value="离职" {% if person and person.employment_status == "离职" %}selected{% endif %}>离职</option>
+        </select>
+      </label>
+      <label>入职时间<input name="entry_date" value="{{ person.entry_date if person else '' }}"></label>
+    </div>
+  </section>
+
+  <section class="form-section">
+    <h3>证件与户籍</h3>
+    <div class="form-grid-2">
+      <label>SFid<input name="sfid" value="{{ person.sfid if person else '' }}"></label>
+      <label>SFid过期时间<input name="sfid_expires_at" value="{{ person.sfid_expires_at if person else '' }}"></label>
+      <label>残疾证ID<input name="disability_cert_id" value="{{ person.disability_cert_id if person else '' }}"></label>
+      <label>发证时间<input name="cert_issued_at" value="{{ person.cert_issued_at if person else '' }}"></label>
+      <label>户籍住址<input name="household_address" value="{{ person.household_address if person else '' }}"></label>
+      <label>户籍性质<input name="household_type" value="{{ person.household_type if person else '' }}"></label>
+    </div>
+  </section>
+
+  <section class="form-section">
+    <h3>安置与发薪</h3>
+    <div class="form-grid-2">
+      <label>在职地区<input name="work_area" value="{{ person.work_area if person else '' }}"></label>
+      <label>安置时间<input name="placement_period" placeholder="1-12 月" value="{{ person.placement_period if person else '' }}"></label>
+      <label>工资卡<input name="salary_card" value="{{ person.salary_card if person else '' }}"></label>
+      <label>发薪类型<input name="payroll_type" placeholder="次月发" value="{{ person.payroll_type if person else '' }}"></label>
+      <label>应发<input name="gross_pay" type="number" step="0.01" value="{{ person.gross_pay if person else 0 }}"></label>
+      <label>应返<input name="return_amount" type="number" step="0.01" value="{{ person.return_amount if person else 0 }}"></label>
+      <label>银行卡ID<input name="bank_card_id" value="{{ person.bank_card_id if person else '' }}"></label>
+      <label>开户行<input name="bank_name" value="{{ person.bank_name if person else '' }}"></label>
+    </div>
+  </section>
+
+  <section class="form-section">
+    <h3>紧急联系人与个人情况</h3>
+    <div class="form-grid-2">
+      <label>紧急联系人<input name="emergency_contact" value="{{ person.emergency_contact if person else '' }}"></label>
+      <label>紧急联系人电话<input name="emergency_phone" value="{{ person.emergency_phone if person else '' }}"></label>
+      <label>紧急联系人关系<input name="emergency_relation" value="{{ person.emergency_relation if person else '' }}"></label>
+      <label>文化程度<input name="education" value="{{ person.education if person else '' }}"></label>
+      <label>婚否<input name="marital_status" value="{{ person.marital_status if person else '' }}"></label>
+    </div>
+  </section>
+
+  <section class="form-section">
+    <h3>残疾信息</h3>
+    <div class="form-grid-2">
+      <label>残疾类型1<input name="disability_type1" value="{{ person.disability_type1 if person else '' }}"></label>
+      <label>残疾等级1<input name="disability_level1" value="{{ person.disability_level1 if person else '' }}"></label>
+      <label>残疾类型2<input name="disability_type2" value="{{ person.disability_type2 if person else '' }}"></label>
+      <label>残疾等级2<input name="disability_level2" value="{{ person.disability_level2 if person else '' }}"></label>
+      <label>残疾部位<input name="disability_part" value="{{ person.disability_part if person else '' }}"></label>
+      <label>残疾原因<input name="disability_reason" value="{{ person.disability_reason if person else '' }}"></label>
+    </div>
+  </section>
+
+  <section class="form-section">
+    <h3>渠道与备注</h3>
+    <div class="form-grid-2">
+      <label>渠道<input name="channel" value="{{ person.channel if person else '' }}"></label>
+      <label class="span-2">备注<textarea name="note" rows="3">{{ person.note if person else '' }}</textarea></label>
+    </div>
+  </section>
+
+  <button type="submit">{{ "保存修改" if person else "保存人员" }}</button>
+</form>
+{% endblock %}

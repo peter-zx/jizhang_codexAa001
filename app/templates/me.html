@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero-card">
+  <form class="period-filter" method="get" action="/me">
+    <label>
+      <span>统计月份</span>
+      <input type="month" name="period" value="{{ period }}">
+    </label>
+    {% if user.role == "grandmaster" %}
+    <label>
+      <span>分销商</span>
+      <select name="owner_id">
+        <option value="">全部</option>
+        {% for distributor in distributors %}
+        <option value="{{ distributor.id }}" {% if owner_id == distributor.id %}selected{% endif %}>{{ distributor.display_name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    {% endif %}
+    <button type="submit">切换</button>
+  </form>
+  <div class="profile-card">
+    <h2>{{ user.display_name }}</h2>
+    <p>{{ period }} 渠道资料概览</p>
+  </div>
+  <div class="profile-grid">
+    <div><span>总资料</span><strong>{{ summary.total_count }}</strong></div>
+    <div><span>在职</span><strong>{{ summary.active_count }}</strong></div>
+    <div><span>离职</span><strong>{{ summary.left_count }}</strong></div>
+    <div><span>佣金总数</span><strong>{{ "%.2f"|format(summary.commission) }}</strong></div>
+  </div>
+</section>
+
+<details class="settings-card quiet-settings">
+  <summary>高级设置</summary>
+  <form method="post" action="/settings/service-fee" class="inline-setting">
+    <input type="hidden" name="period" value="{{ period }}">
+    <label>默认服务费<input name="default_service_fee" type="password" inputmode="decimal" step="0.01" placeholder="输入新服务费"></label>
+    <button type="submit">保存</button>
+  </form>
+</details>
+
+<section class="section-title">
+  <div>
+    <h2>人员管理</h2>
+    <p>编辑资料、修改状态在这里处理。</p>
+  </div>
+  <a href="/people/new">新增</a>
+</section>
+
+<section class="manage-grid">
+  {% for item in people %}
+  <article class="manage-card">
+    <div class="manage-check">
+      <span>{{ item.name }}</span>
+    </div>
+    <a href="/people/{{ item.id }}/edit">编辑</a>
+    <form method="post" action="/people/{{ item.id }}/delete" class="delete-person-form" onsubmit="return confirm('确认删除 {{ item.name }}？删除后不可恢复。');">
+      <input type="hidden" name="period" value="{{ period }}">
+      <button type="submit">删除</button>
+    </form>
+    <p>{{ item.employment_status }} · {{ item.work_area or "未填地区" }}</p>
+    <p>{{ item.sfid or item.disability_cert_id or "未填证件" }}</p>
+  </article>
+  {% else %}
+  <div class="empty-state"><h3>暂无资料</h3><p>先新增或导入人员。</p></div>
+  {% endfor %}
+</section>
+
+<section class="me-actions">
+  <a href="/export-center?period={{ period }}">进入导出中心</a>
+  <a href="/dashboard">回到主页</a>
+  <a href="/imports">导入表格</a>
+  <form method="post" action="/auth/logout">
+    <button type="submit">退出登录</button>
+  </form>
+</section>
+{% endblock %}

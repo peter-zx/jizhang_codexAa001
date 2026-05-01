@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>{{ app_name }}</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="app-shell">
+    {% if user %}
+    <header class="mobile-head">
+      <div>
+        <span class="eyebrow">{{ "总舵主" if user.role == "grandmaster" else "分销商" }}</span>
+        <h1>{{ user.display_name }}</h1>
+      </div>
+      {% if request.url.path == "/dashboard" %}
+      <a class="mini-action" href="/exports?period={{ period or '' }}">导出</a>
+      {% endif %}
+    </header>
+    {% endif %}
+
+    {% if message %}<div class="notice ok">{{ message }}</div>{% endif %}
+    {% if error %}<div class="notice bad">{{ error }}</div>{% endif %}
+    {% block content %}{% endblock %}
+  </main>
+
+  {% if user %}
+  <nav class="tabbar" aria-label="主导航">
+    <a href="/dashboard" class="{{ 'active' if request.url.path == '/dashboard' else '' }}">
+      <span>⌂</span>
+      <b>主页</b>
+    </a>
+    <a href="/people/new" class="{{ 'active' if request.url.path == '/people/new' else '' }}">
+      <span>＋</span>
+      <b>新增</b>
+    </a>
+    <a href="/imports" class="{{ 'active' if request.url.path == '/imports' else '' }}">
+      <span>⇧</span>
+      <b>导入</b>
+    </a>
+    <a href="/me" class="{{ 'active' if request.url.path == '/me' else '' }}">
+      <span>☻</span>
+      <b>我的</b>
+    </a>
+  </nav>
+  {% endif %}
+</body>
+</html>

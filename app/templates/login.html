@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="auth-card">
+  <h1>{{ app_name }}</h1>
+  <p>分销商月度回收确认工具</p>
+  <form method="post" action="/auth/login">
+    <label>用户名<input name="username" required autocomplete="username"></label>
+    <label>密码<input name="password" type="password" required autocomplete="current-password"></label>
+    <button type="submit">登录</button>
+  </form>
+  <a href="/auth/register">分销商注册</a>
+</section>
+{% endblock %}
