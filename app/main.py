@@ -17,7 +17,7 @@ from app.database import Base, SessionLocal, engine, get_db
 from app.models import Person, Role, StoredFile, User
 from app.security import get_current_user, hash_password, verify_password
 from app.services.excel import DEFAULT_EXPORT_FIELDS, FIELD_DEFINITIONS, create_template_xlsx, export_people_to_xlsx, import_people_from_xlsx
-from app.services.ledger import current_period, dashboard_summary, normalize_period, normalize_status, profile_summary, valid_person_name, visible_people_query
+from app.services.ledger import _all_people_query, current_period, dashboard_summary, normalize_period, normalize_status, profile_summary, valid_person_name, visible_people_query
 from app.services.storage import ensure_storage_dirs, save_upload
 from app.services.word import export_people_to_docx
 
@@ -193,7 +193,7 @@ def me_page(
     owner_id: int | None = None,
 ):
     period = normalize_period(period or current_period())
-    people = db.scalars(visible_people_query(db, user, period, owner_id).options(selectinload(Person.owner))).all()
+    people = db.scalars(_all_people_query(db, user, owner_id).options(selectinload(Person.owner))).all()
     summary = profile_summary(db, user, period, owner_id)
     return render(request, "me.html", {
         "user": user,

@@ -61,12 +61,16 @@ def _apply_scope(stmt, user: User, owner_id: int | None):
 
 def visible_people_query(db: Session, user: User, period: str | None = None, owner_id: int | None = None):
     stmt = _valid_people_filter(select(Person))
-    if user.role == Role.DISTRIBUTOR.value:
-        stmt = stmt.where(Person.owner_id == user.id)
-    elif owner_id:
-        stmt = stmt.where(Person.owner_id == owner_id)
+    _apply_scope(stmt, user, owner_id)
     if period:
         stmt = stmt.where(Person.settlement_period == normalize_period(period))
+    return stmt.order_by(Person.employment_status.desc(), Person.monthly_confirmed.asc(), Person.id.asc())
+
+
+def _all_people_query(db: Session, user: User, owner_id: int | None = None):
+    """All people regardless of period — for /me page listing."""
+    stmt = _valid_people_filter(select(Person))
+    _apply_scope(stmt, user, owner_id)
     return stmt.order_by(Person.employment_status.desc(), Person.monthly_confirmed.asc(), Person.id.asc())
 
 
