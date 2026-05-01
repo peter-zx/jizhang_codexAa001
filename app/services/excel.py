@@ -8,7 +8,7 @@ from openpyxl.worksheet.table import Table, TableStyleInfo
 from sqlalchemy.orm import Session
 
 from app.models import Person, StoredFile, User
-from app.services.ledger import normalize_period, normalize_status, valid_person_name
+from app.services.ledger import current_period, normalize_period, normalize_status, valid_person_name
 from app.services.storage import export_path
 
 logger = logging.getLogger(__name__)
@@ -148,7 +148,7 @@ def import_people_from_xlsx(db: Session, path: Path, owner: User, operator: User
             payload["service_fee"] = _num(payload.get("service_fee") if "service_fee" in payload else owner.default_service_fee)
             payload["gross_pay"] = _num(payload.get("gross_pay"))
             payload["return_amount"] = _num(payload.get("return_amount"))
-            payload["settlement_period"] = normalize_period(payload.get("settlement_period"))
+            payload["settlement_period"] = normalize_period(payload.get("settlement_period")) if payload.get("settlement_period") else current_period()
             payload["employment_status"] = normalize_status(payload.get("employment_status"))
             extra = {}
             for idx, header in enumerate(headers):
