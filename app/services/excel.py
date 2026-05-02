@@ -148,7 +148,7 @@ def import_people_from_xlsx(db: Session, path: Path, owner: User, operator: User
             payload["service_fee"] = _num(payload.get("service_fee") if "service_fee" in payload else owner.default_service_fee)
             payload["gross_pay"] = _num(payload.get("gross_pay"))
             payload["return_amount"] = _num(payload.get("return_amount"))
-            payload["settlement_period"] = normalize_period(payload.get("settlement_period")) if payload.get("settlement_period") else current_period()
+            payload["settlement_period"] = normalize_period(payload.get("settlement_period")) or current_period()
             payload["employment_status"] = normalize_status(payload.get("employment_status"))
             extra = {}
             for idx, header in enumerate(headers):

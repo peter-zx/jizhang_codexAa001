@@ -1,27 +1,39 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="hero-card">
-  <form class="period-filter" method="get" action="/dashboard">
-    <label>
+<section class="hero-card dashboard-hero">
+  <div class="month-switcher">
+    <a class="month-arrow" href="/dashboard?period={{ prev_period }}{% if owner_id %}&owner_id={{ owner_id }}{% endif %}" aria-label="上个月">‹</a>
+    <div class="month-current">
       <span>结算月份</span>
-      <input type="month" name="period" value="{{ period }}">
-    </label>
-    {% if user.role == "grandmaster" %}
+      <strong>{{ period }}</strong>
+    </div>
+    <a class="month-arrow" href="/dashboard?period={{ next_period }}{% if owner_id %}&owner_id={{ owner_id }}{% endif %}" aria-label="下个月">›</a>
+  </div>
+
+  <div class="month-pill-row">
+    {% for item_period in quick_periods %}
+    <a class="{{ 'active' if item_period == period else '' }}" href="/dashboard?period={{ item_period }}{% if owner_id %}&owner_id={{ owner_id }}{% endif %}">{{ item_period[5:] }}</a>
+    {% endfor %}
+  </div>
+
+  {% if user.role == "grandmaster" %}
+  <form class="owner-filter" method="get" action="/dashboard">
+    <input type="hidden" name="period" value="{{ period }}">
     <label>
       <span>分销商</span>
-      <select name="owner_id">
-        <option value="">全部</option>
+      <select name="owner_id" onchange="this.form.submit()">
+        <option value="">全部分销商</option>
         {% for distributor in distributors %}
         <option value="{{ distributor.id }}" {% if owner_id == distributor.id %}selected{% endif %}>{{ distributor.display_name }}</option>
         {% endfor %}
       </select>
     </label>
-    {% endif %}
-    <button type="submit">切换</button>
   </form>
+  {% endif %}
+
   <div class="focus-metrics">
     <div>
-      <span>在职人数</span>
+      <span>在职计算人数</span>
       <strong>{{ summary.active_count }}</strong>
     </div>
     <div>
@@ -30,38 +42,106 @@
     </div>
   </div>
   <div class="sub-metrics">
+    <span>总资料 {{ summary.total_count }}</span>
+    <span>离职 {{ summary.left_count }}</span>
     <span>待核准 {{ summary.pending_count }}</span>
     <span>已核准 {{ summary.confirmed_count }}</span>
-    <span>总资料 {{ summary.total_count }}</span>
+  </div>
+</section>
+
+<section class="section-title">
+  <div>
+    <h2>统计数据概览</h2>
+    <p>{{ period[:4] }} 年 12 个月坐标，未发生月份不显示数据。</p>
+  </div>
+</section>
+
+<section class="analytics-panel analytics-switch-card" data-chart-card>
+  <div class="chart-tabs" role="tablist" aria-label="统计图切换">
+    <button type="button" class="active" data-chart-tab="bar">柱状图</button>
+    <button type="button" data-chart-tab="line">折线图</button>
+    <button type="button" data-chart-tab="donut">饼图</button>
+  </div>
+
+  <div class="chart-view active" data-chart-view="bar">
+    <div class="panel-head">
+      <strong>全年在职人数</strong>
+      <span>1-12 月</span>
+    </div>
+    <div class="bar-chart annual-bars">
+      {% for item in chart_data %}
+      <div class="bar-item {{ '' if item.has_data else 'future' }}">
+        <div class="bar-track">
+          {% if item.has_data %}<i style="height: {{ (item.active_count / max_active_count * 100) if max_active_count else 0 }}%"></i>{% endif %}
+        </div>
+        <b>{% if item.has_data %}{{ item.active_count }}{% endif %}</b>
+        <span>{{ loop.index }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="chart-view" data-chart-view="line">
+    <div class="panel-head">
+      <strong>全年应返趋势</strong>
+      <span>未发生月份留空</span>
+    </div>
+    <svg class="line-chart" viewBox="0 0 240 100" preserveAspectRatio="none" role="img" aria-label="全年应返趋势">
+      <polyline points="{{ line_points }}" fill="none" stroke="#176b87" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"></polyline>
+      {% for item in chart_data %}
+      {% if item.has_data %}
+      <circle cx="{{ loop.index0 * 21.8 }}" cy="{{ 90 - (item.return_amount / max_return_amount * 72 if max_return_amount else 0) }}" r="3.3"></circle>
+      {% endif %}
+      {% endfor %}
+    </svg>
+    <div class="trend-labels annual-labels">
+      {% for item in chart_data %}
+      <span>{{ loop.index }}</span>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="chart-view" data-chart-view="donut">
+    <div class="panel-head">
+      <strong>{{ period }} 人员状态</strong>
+      <span>当前月份</span>
+    </div>
+    <div class="donut-wrap">
+      <div class="donut" style="--active: {{ (summary.active_count / summary.total_count * 100) if summary.total_count else 0 }};"></div>
+      <div class="donut-legend">
+        <span><i class="active-dot"></i>在职 {{ summary.active_count }}</span>
+        <span><i class="left-dot-small"></i>离职 {{ summary.left_count }}</span>
+      </div>
+    </div>
   </div>
 </section>
 
 <section class="section-title">
   <div>
     <h2>本月回收确认</h2>
-    <p>在职人员逐行勾选，批量核准。</p>
+    <p>勾选在职人员后批量核准，离职资料只折叠展示。</p>
   </div>
 </section>
 
 <div class="confirm-list">
   <section class="person-list">
     {% for item in active_people %}
-    <article class="person-card compact-person {{ 'confirmed' if item.monthly_confirmed else '' }}">
+    <article class="person-card compact-person {{ 'confirmed' if item.id in confirmed_ids else '' }}">
       <div class="person-line">
         <label class="check-wrap" aria-label="选择 {{ item.name }}">
-          <input type="checkbox" form="bulk-confirm" name="person_ids" value="{{ item.id }}" {% if item.monthly_confirmed %}disabled{% endif %}>
+          <input type="checkbox" form="bulk-confirm" name="person_ids" value="{{ item.id }}" {% if item.id in confirmed_ids %}disabled{% endif %}>
         </label>
         <span class="line-name">{{ item.name }}</span>
         <span>{{ item.work_area or "未填地区" }}</span>
         <span>应发 {{ "%.0f"|format(item.gross_pay) }}</span>
         <span>应返 {{ "%.0f"|format(item.return_amount) }}</span>
-        <span class="{{ 'ok-text' if item.monthly_confirmed else 'warn-text' }}">{{ "已核准" if item.monthly_confirmed else "待核准" }}</span>
+        <span class="{{ 'ok-text' if item.id in confirmed_ids else 'warn-text' }}">{{ "已核准" if item.id in confirmed_ids else "待核准" }}</span>
       </div>
     </article>
     {% else %}
     <div class="empty-state">
       <h3>本月暂无在职人员</h3>
-      <p>离职资料会折叠在下方，不参与核准。</p>
+      <p>人员资料会保留，只有在职状态才进入金额和核准统计。</p>
     </div>
     {% endfor %}
   </section>
@@ -85,9 +165,23 @@
     <button type="button" class="secondary-btn" onclick="document.querySelectorAll('input[name=person_ids]:not(:disabled)').forEach(item => item.checked = true)">全选待核准</button>
     <form id="bulk-confirm" method="post" action="/confirmations">
       <input type="hidden" name="period" value="{{ period }}">
+      {% if owner_id %}<input type="hidden" name="owner_id" value="{{ owner_id }}">{% endif %}
       <button type="submit">批量核准</button>
     </form>
   </div>
   {% endif %}
 </div>
+
+<script>
+  document.querySelectorAll("[data-chart-card]").forEach(card => {
+    const tabs = Array.from(card.querySelectorAll("[data-chart-tab]"));
+    const views = Array.from(card.querySelectorAll("[data-chart-view]"));
+    tabs.forEach(tab => {
+      tab.addEventListener("click", () => {
+        tabs.forEach(item => item.classList.toggle("active", item === tab));
+        views.forEach(view => view.classList.toggle("active", view.dataset.chartView === tab.dataset.chartTab));
+      });
+    });
+  });
+</script>
 {% endblock %}

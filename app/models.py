@@ -88,3 +88,14 @@ class StoredFile(Base):
     stored_name: Mapped[str] = mapped_column(String(255), unique=True)
     path: Mapped[str] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class MonthlyConfirmation(Base):
+    __tablename__ = "monthly_confirmations"
+    __table_args__ = (UniqueConstraint("person_id", "period", name="uq_person_period_confirmation"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    person_id: Mapped[int] = mapped_column(ForeignKey("people.id"), index=True, nullable=False)
+    period: Mapped[str] = mapped_column(String(7), index=True, nullable=False)
+    confirmed_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    confirmed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

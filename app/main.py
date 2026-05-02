@@ -14,10 +14,25 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import BASE_DIR, settings, setup_logging
 from app.database import Base, SessionLocal, engine, get_db
-from app.models import Person, Role, StoredFile, User
+from app.models import MonthlyConfirmation, Person, Role, StoredFile, User
 from app.security import get_current_user, hash_password, verify_password
 from app.services.excel import DEFAULT_EXPORT_FIELDS, FIELD_DEFINITIONS, create_template_xlsx, export_people_to_xlsx, import_people_from_xlsx
-from app.services.ledger import _all_people_query, current_period, dashboard_summary, normalize_period, normalize_status, profile_summary, valid_person_name, visible_people_query
+from app.services.ledger import (
+    ACTIVE_STATUS,
+    LEFT_STATUS,
+    _all_people_query,
+    annual_chart_data,
+    current_period,
+    dashboard_summary_from_people,
+    confirmation_ids_for,
+    normalize_period,
+    normalize_status,
+    period_add,
+    profile_summary,
+    valid_person_name,
+    visible_people_as_of,
+    year_periods,
+)
 from app.services.storage import ensure_storage_dirs, save_upload
 from app.services.word import export_people_to_docx
 
@@ -168,17 +183,35 @@ def dashboard(
     owner_id: int | None = None,
 ):
     period = normalize_period(period or current_period())
-    people = db.scalars(visible_people_query(db, user, period, owner_id).options(selectinload(Person.owner))).all()
-    active_people = [person for person in people if person.employment_status == "在职"]
-    left_people = [person for person in people if person.employment_status == "离职"]
-    summary = dashboard_summary(db, user, period, owner_id)
+    people = visible_people_as_of(db, user, period, owner_id)
+    active_people = [person for person in people if normalize_status(person.employment_status) == ACTIVE_STATUS]
+    left_people = [person for person in people if normalize_status(person.employment_status) == LEFT_STATUS]
+    confirmed_ids = confirmation_ids_for(db, people, period)
+    summary = dashboard_summary_from_people(people, confirmed_ids)
+    chart_data = annual_chart_data(db, user, period, owner_id)
+    data_points = [item for item in chart_data if item["has_data"]]
+    max_active_count = max([item["active_count"] for item in data_points] + [1])
+    max_return_amount = max([item["return_amount"] for item in data_points] + [1])
+    line_points = " ".join(
+        f"{index * 21.8:.1f},{90 - (item['return_amount'] / max_return_amount * 72 if max_return_amount else 0):.1f}"
+        for index, item in enumerate(chart_data)
+        if item["has_data"]
+    )
     return render(request, "dashboard.html", {
         "user": user,
         "period": period,
+        "prev_period": period_add(period, -1),
+        "next_period": period_add(period, 1),
+        "quick_periods": year_periods(period),
         "people": people,
         "active_people": active_people,
         "left_people": left_people,
         "summary": summary,
+        "confirmed_ids": confirmed_ids,
+        "chart_data": chart_data,
+        "line_points": line_points,
+        "max_active_count": max_active_count,
+        "max_return_amount": max_return_amount,
         "distributors": distributors_for(db, user),
         "owner_id": owner_id,
     })
@@ -198,6 +231,9 @@ def me_page(
     return render(request, "me.html", {
         "user": user,
         "period": period,
+        "prev_period": period_add(period, -1),
+        "next_period": period_add(period, 1),
+        "quick_periods": year_periods(period),
         "summary": summary,
         "people": people,
         "distributors": distributors_for(db, user),
@@ -217,7 +253,7 @@ def export_center(
     download_id: int | None = None,
 ):
     period = normalize_period(period or current_period())
-    people = db.scalars(visible_people_query(db, user, period, owner_id).options(selectinload(Person.owner))).all()
+    people = visible_people_as_of(db, user, period, owner_id)
     download_file = db.get(StoredFile, download_id) if download_id else None
     if download_file and download_file.owner_id != user.id and user.role != Role.GRANDMASTER.value:
         download_file = None
@@ -517,24 +553,34 @@ def batch_confirm(
     db: Annotated[Session, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
     period: str = Form(...),
+    owner_id: int | None = Form(None),
     person_ids: list[int] = Form(default=[]),
 ):
     period = normalize_period(period)
     if not person_ids:
-        return redirect("/dashboard", period=period, error="请先勾选要核准的在职人员")
+        return redirect("/dashboard", period=period, owner_id=owner_id, error="请先勾选要核准的在职人员")
     people = db.scalars(select(Person).where(Person.id.in_(person_ids))).all()
+    visible_ids = {person.id for person in visible_people_as_of(db, user, period, owner_id)}
     changed = 0
+    existing_ids = {
+        item for item in db.scalars(
+            select(MonthlyConfirmation.person_id).where(
+                MonthlyConfirmation.period == period,
+                MonthlyConfirmation.person_id.in_(person_ids),
+            )
+        ).all()
+    }
     for person in people:
         if not can_access_person(user, person):
             continue
-        if person.settlement_period != period or person.employment_status != "在职" or not valid_person_name(person.name):
+        if person.id not in visible_ids or normalize_status(person.employment_status) != ACTIVE_STATUS or not valid_person_name(person.name):
             continue
-        if not person.monthly_confirmed:
-            person.monthly_confirmed = True
-            person.confirmed_at = datetime.utcnow()
-            changed += 1
+        if person.id in existing_ids:
+            continue
+        db.add(MonthlyConfirmation(person_id=person.id, period=period, confirmed_by_id=user.id, confirmed_at=datetime.utcnow()))
+        changed += 1
     db.commit()
-    return redirect("/dashboard", period=period, message=f"已批量核准 {changed} 人")
+    return redirect("/dashboard", period=period, owner_id=owner_id, message=f"已批量核准 {changed} 人")
 
 
 @app.get("/imports", response_class=HTMLResponse)
@@ -578,11 +624,11 @@ def export_excel(
         period = normalize_period(period or current_period())
         if not person_ids:
             return redirect("/export-center", period=period, error="请先勾选需要导出的人员")
-        people = db.scalars(
-            visible_people_query(db, user, period, owner_id)
-            .where(Person.id.in_(person_ids))
-            .options(selectinload(Person.owner))
-        ).all()
+        visible_ids = {person.id for person in visible_people_as_of(db, user, period, owner_id)}
+        people = [
+            person for person in db.scalars(select(Person).where(Person.id.in_(person_ids)).options(selectinload(Person.owner))).all()
+            if person.id in visible_ids and can_access_person(user, person)
+        ]
         record = export_people_to_xlsx(db, people, user, period, fields)
         return FileResponse(record.path, filename=Path(record.path).name, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     except Exception:
@@ -603,11 +649,11 @@ def create_excel_export(
         period = normalize_period(period or current_period())
         if not person_ids:
             return redirect("/me", period=period, error="请先勾选需要导出的人员")
-        people = db.scalars(
-            visible_people_query(db, user, period, owner_id)
-            .where(Person.id.in_(person_ids))
-            .options(selectinload(Person.owner))
-        ).all()
+        visible_ids = {person.id for person in visible_people_as_of(db, user, period, owner_id)}
+        people = [
+            person for person in db.scalars(select(Person).where(Person.id.in_(person_ids)).options(selectinload(Person.owner))).all()
+            if person.id in visible_ids and can_access_person(user, person)
+        ]
         if not people:
             return redirect("/export-center", period=period, error="没有可导出的人员")
         record = export_people_to_xlsx(db, people, user, period, fields)
@@ -630,11 +676,11 @@ def export_word(
         period = normalize_period(period or current_period())
         if not person_ids:
             return redirect("/export-center", period=period, error="请先勾选需要导出的人员")
-        people = db.scalars(
-            visible_people_query(db, user, period, owner_id)
-            .where(Person.id.in_(person_ids))
-            .options(selectinload(Person.owner))
-        ).all()
+        visible_ids = {person.id for person in visible_people_as_of(db, user, period, owner_id)}
+        people = [
+            person for person in db.scalars(select(Person).where(Person.id.in_(person_ids)).options(selectinload(Person.owner))).all()
+            if person.id in visible_ids and can_access_person(user, person)
+        ]
         record = export_people_to_docx(db, people, user, period, None)
         return FileResponse(record.path, filename="个人信息.docx", media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
     except Exception:
@@ -655,11 +701,11 @@ def create_word_export(
         period = normalize_period(period or current_period())
         if not person_ids:
             return redirect("/me", period=period, error="请先勾选需要导出的人员")
-        people = db.scalars(
-            visible_people_query(db, user, period, owner_id)
-            .where(Person.id.in_(person_ids))
-            .options(selectinload(Person.owner))
-        ).all()
+        visible_ids = {person.id for person in visible_people_as_of(db, user, period, owner_id)}
+        people = [
+            person for person in db.scalars(select(Person).where(Person.id.in_(person_ids)).options(selectinload(Person.owner))).all()
+            if person.id in visible_ids and can_access_person(user, person)
+        ]
         if not people:
             return redirect("/export-center", period=period, error="没有可导出的人员")
         record = export_people_to_docx(db, people, user, period, fields)
@@ -695,3 +741,4 @@ def download_template(user: Annotated[User, Depends(get_current_user)]):
     except Exception:
         logger.exception("模板下载失败")
         raise HTTPException(status_code=500, detail="模板下载失败，请查看日志")
+

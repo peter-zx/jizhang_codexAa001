@@ -1,24 +1,36 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="hero-card">
-  <form class="period-filter" method="get" action="/me">
-    <label>
+<section class="hero-card dashboard-hero">
+  <div class="month-switcher">
+    <a class="month-arrow" href="/me?period={{ prev_period }}{% if owner_id %}&owner_id={{ owner_id }}{% endif %}" aria-label="上个月">‹</a>
+    <div class="month-current">
       <span>统计月份</span>
-      <input type="month" name="period" value="{{ period }}">
-    </label>
-    {% if user.role == "grandmaster" %}
+      <strong>{{ period }}</strong>
+    </div>
+    <a class="month-arrow" href="/me?period={{ next_period }}{% if owner_id %}&owner_id={{ owner_id }}{% endif %}" aria-label="下个月">›</a>
+  </div>
+
+  <div class="month-pill-row">
+    {% for item_period in quick_periods %}
+    <a class="{{ 'active' if item_period == period else '' }}" href="/me?period={{ item_period }}{% if owner_id %}&owner_id={{ owner_id }}{% endif %}">{{ item_period[5:] }}</a>
+    {% endfor %}
+  </div>
+
+  {% if user.role == "grandmaster" %}
+  <form class="owner-filter" method="get" action="/me">
+    <input type="hidden" name="period" value="{{ period }}">
     <label>
       <span>分销商</span>
-      <select name="owner_id">
-        <option value="">全部</option>
+      <select name="owner_id" onchange="this.form.submit()">
+        <option value="">全部分销商</option>
         {% for distributor in distributors %}
         <option value="{{ distributor.id }}" {% if owner_id == distributor.id %}selected{% endif %}>{{ distributor.display_name }}</option>
         {% endfor %}
       </select>
     </label>
-    {% endif %}
-    <button type="submit">切换</button>
   </form>
+  {% endif %}
+
   <div class="profile-card">
     <h2>{{ user.display_name }}</h2>
     <p>{{ period }} 渠道资料概览</p>
@@ -68,8 +80,8 @@
 </section>
 
 <section class="me-actions">
-  <a href="/export-center?period={{ period }}">进入导出中心</a>
-  <a href="/dashboard">回到主页</a>
+  <a href="/export-center?period={{ period }}{% if owner_id %}&owner_id={{ owner_id }}{% endif %}">进入导出中心</a>
+  <a href="/dashboard?period={{ period }}{% if owner_id %}&owner_id={{ owner_id }}{% endif %}">回到主页</a>
   <a href="/imports">导入表格</a>
   <form method="post" action="/auth/logout">
     <button type="submit">退出登录</button>

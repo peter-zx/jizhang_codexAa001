@@ -15,7 +15,7 @@
         <h1>{{ user.display_name }}</h1>
       </div>
       {% if request.url.path == "/dashboard" %}
-      <a class="mini-action" href="/exports?period={{ period or '' }}">导出</a>
+      <a class="mini-action" href="/export-center?period={{ period or '' }}">导出</a>
       {% endif %}
     </header>
     {% endif %}
