@@ -1267,7 +1267,7 @@ button { cursor: pointer; }
 }
 .invite-row {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: 1fr auto minmax(86px, auto);
   align-items: center;
   gap: 8px;
 }
@@ -1276,10 +1276,39 @@ button { cursor: pointer; }
   letter-spacing: .04em;
 }
 .invite-row form { margin: 0; }
-.invite-row button {
+.invite-actions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+.invite-actions button {
+  min-width: 76px;
+  padding: 0 10px;
+  background: #eef2f6;
+  color: #344054;
+}
+.invite-actions .danger-btn {
   background: #fef3f2;
   color: #b42318;
-  padding: 0 10px;
+}
+.invite-link {
+  user-select: all;
+}
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 88px;
+  transform: translateX(-50%);
+  z-index: 20;
+  min-width: 128px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: #162033;
+  color: #fff;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 800;
+  box-shadow: 0 10px 28px rgba(31, 42, 68, .24);
 }
 .log-list article {
   display: grid;

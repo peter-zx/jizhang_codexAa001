@@ -74,7 +74,7 @@
     <article class="invite-row">
       <div>
         <strong>{{ invite.code }}</strong>
-        <p>/auth/register?invite={{ invite.code }}</p>
+        <p class="invite-link" data-register-path="/auth/register?invite={{ invite.code }}">/auth/register?invite={{ invite.code }}</p>
         <p>创建 {{ invite.created_at.strftime("%Y-%m-%d %H:%M") }} · 已注册 {{ used_users|length }} 人{% if invite.note %} · 备注已保存{% endif %}</p>
         <details class="compact-details">
           <summary>使用记录 / 内部备注</summary>
@@ -89,11 +89,15 @@
       <span class="{{ 'ok-text' if invite.is_active and not invite.deleted_at else 'warn-text' }}">
         {% if invite.deleted_at %}已作废{% else %}可使用{% endif %}
       </span>
-      {% if invite.is_active and not invite.deleted_at %}
-      <form method="post" action="/admin/invitations/{{ invite.id }}/delete" onsubmit="return confirm('确认作废邀请码 {{ invite.code }}？');">
-        <button type="submit">作废</button>
-      </form>
-      {% endif %}
+      <div class="invite-actions">
+        <button type="button" data-copy-text="{{ invite.code }}">复制码</button>
+        <button type="button" data-copy-link="/auth/register?invite={{ invite.code }}">分享链接</button>
+        {% if invite.is_active and not invite.deleted_at %}
+        <form method="post" action="/admin/invitations/{{ invite.id }}/delete" onsubmit="return confirm('确认作废邀请码 {{ invite.code }}？');">
+          <button type="submit" class="danger-btn">作废</button>
+        </form>
+        {% endif %}
+      </div>
     </article>
     {% else %}
     <div class="empty-state"><h3>暂无邀请码</h3><p>点击上方按钮生成。</p></div>
@@ -118,4 +122,43 @@
     {% endfor %}
   </div>
 </details>
+
+<div class="toast" id="copy-toast" hidden>已复制</div>
+
+<script>
+  (function () {
+    const toast = document.getElementById("copy-toast");
+    function showToast(text) {
+      toast.textContent = text;
+      toast.hidden = false;
+      window.clearTimeout(showToast.timer);
+      showToast.timer = window.setTimeout(() => {
+        toast.hidden = true;
+      }, 1600);
+    }
+    async function copyText(text, okText) {
+      try {
+        await navigator.clipboard.writeText(text);
+        showToast(okText);
+      } catch (error) {
+        const helper = document.createElement("textarea");
+        helper.value = text;
+        document.body.appendChild(helper);
+        helper.select();
+        document.execCommand("copy");
+        helper.remove();
+        showToast(okText);
+      }
+    }
+    document.querySelectorAll("[data-copy-text]").forEach(button => {
+      button.addEventListener("click", () => copyText(button.dataset.copyText, "邀请码已复制"));
+    });
+    document.querySelectorAll("[data-copy-link]").forEach(button => {
+      button.addEventListener("click", () => {
+        const url = new URL(button.dataset.copyLink, window.location.origin).toString();
+        copyText(url, "注册链接已复制");
+      });
+    });
+  })();
+</script>
 {% endblock %}
