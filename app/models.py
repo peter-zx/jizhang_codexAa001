@@ -22,6 +22,7 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(32), default=Role.DISTRIBUTOR.value, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     default_service_fee: Mapped[float] = mapped_column(Float, default=800)
+    invitation_code: Mapped[str | None] = mapped_column(String(64), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     people: Mapped[list["Person"]] = relationship(back_populates="owner")
@@ -99,3 +100,29 @@ class MonthlyConfirmation(Base):
     period: Mapped[str] = mapped_column(String(7), index=True, nullable=False)
     confirmed_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
     confirmed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class InvitationCode(Base):
+    __tablename__ = "invitation_codes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    used_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    note: Mapped[str | None] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    actor_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    action: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
+    target_type: Mapped[str | None] = mapped_column(String(80), index=True)
+    target_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    detail: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)

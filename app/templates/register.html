@@ -2,8 +2,9 @@
 {% block content %}
 <section class="auth-card">
   <h1>分销商注册</h1>
-  <p>注册后只能查看自己的人员数据。</p>
+  <p>注册必须使用总舵主生成的邀请码。</p>
   <form method="post" action="/auth/register">
+    <label>邀请码<input name="invite_code" required value="{{ invite }}" autocomplete="one-time-code"></label>
     <label>用户名<input name="username" required autocomplete="username"></label>
     <label>显示名称<input name="display_name" required></label>
     <label>密码<input name="password" type="password" required minlength="8" autocomplete="new-password"></label>

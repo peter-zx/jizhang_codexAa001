@@ -1,4 +1,5 @@
 import logging
+import secrets
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated
@@ -14,7 +15,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import BASE_DIR, settings, setup_logging
 from app.database import Base, SessionLocal, engine, get_db
-from app.models import MonthlyConfirmation, Person, Role, StoredFile, User
+from app.models import AuditLog, InvitationCode, MonthlyConfirmation, Person, Role, StoredFile, User
 from app.security import get_current_user, hash_password, verify_password
 from app.services.excel import DEFAULT_EXPORT_FIELDS, FIELD_DEFINITIONS, create_template_xlsx, export_people_to_xlsx, import_people_from_xlsx
 from app.services.ledger import (
@@ -70,6 +71,8 @@ def ensure_schema() -> None:
         user_columns = table_columns.get("users", set())
         if "default_service_fee" not in user_columns:
             conn.execute(text("ALTER TABLE users ADD COLUMN default_service_fee FLOAT DEFAULT 800"))
+        if "invitation_code" not in user_columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN invitation_code VARCHAR(64)"))
 
 
 @app.on_event("startup")
@@ -102,20 +105,71 @@ def render(request: Request, name: str, context: dict | None = None) -> HTMLResp
 
 
 def redirect(url: str, **params) -> RedirectResponse:
-    if params:
+    clean_params = {key: value for key, value in params.items() if value is not None}
+    if clean_params:
         from urllib.parse import urlencode
-        url = f"{url}?{urlencode(params, doseq=True)}"
+        url = f"{url}?{urlencode(clean_params, doseq=True)}"
     return RedirectResponse(url, status_code=303)
+
+
+def parse_optional_int(value: object | None) -> int | None:
+    if value is None:
+        return None
+    text_value = str(value).strip()
+    if not text_value or text_value.lower() == "none":
+        return None
+    return int(text_value)
 
 
 def can_access_person(user: User, person: Person) -> bool:
     return user.role == Role.GRANDMASTER.value or person.owner_id == user.id
 
 
+def require_grandmaster(user: User) -> None:
+    if user.role != Role.GRANDMASTER.value:
+        raise HTTPException(status_code=403, detail="只有总舵主可以操作")
+
+
+def write_audit(db: Session, actor: User | None, action: str, target_type: str | None = None, target_id: int | None = None, detail: str | None = None) -> None:
+    db.add(AuditLog(
+        actor_id=actor.id if actor else None,
+        action=action,
+        target_type=target_type,
+        target_id=target_id,
+        detail=detail,
+    ))
+
+
 def distributors_for(db: Session, user: User):
     if user.role != Role.GRANDMASTER.value:
         return []
     return db.scalars(select(User).where(User.role == Role.DISTRIBUTOR.value).order_by(User.display_name)).all()
+
+
+def owner_options_for(db: Session, user: User, owner_id: int | None = None) -> list[User]:
+    if user.role != Role.GRANDMASTER.value:
+        return [user]
+    if owner_id:
+        owner = db.get(User, owner_id)
+        return [owner] if owner else []
+    return [user, *distributors_for(db, user)]
+
+
+def grouped_people_for_owners(owners: list[User], people: list[Person], confirmed_ids: set[int] | None = None, actor: User | None = None) -> list[dict]:
+    confirmed_ids = confirmed_ids or set()
+    groups = []
+    for owner in owners:
+        owner_people = [person for person in people if person.owner_id == owner.id]
+        groups.append({
+            "owner": owner,
+            "label": "总舵组" if owner.role == Role.GRANDMASTER.value else owner.display_name,
+            "people": owner_people,
+            "active_people": [person for person in owner_people if normalize_status(person.employment_status) == ACTIVE_STATUS],
+            "left_people": [person for person in owner_people if normalize_status(person.employment_status) == LEFT_STATUS],
+            "summary": dashboard_summary_from_people(owner_people, confirmed_ids),
+            "can_confirm": (actor.role != Role.GRANDMASTER.value if actor else True) or (actor is not None and owner.id == actor.id),
+        })
+    return groups
 
 
 def duplicate_identifier(db: Session, field: str, value: str | None, exclude_id: int | None = None) -> bool:
@@ -150,21 +204,47 @@ def login(request: Request, db: Annotated[Session, Depends(get_db)], username: s
 
 
 @app.get("/auth/register", response_class=HTMLResponse)
-def register_page(request: Request):
-    return render(request, "register.html")
+def register_page(request: Request, invite: str | None = None):
+    return render(request, "register.html", {"invite": invite or ""})
 
 
 @app.post("/auth/register")
-def register(db: Annotated[Session, Depends(get_db)], username: str = Form(...), display_name: str = Form(...), password: str = Form(...)):
+def register(
+    db: Annotated[Session, Depends(get_db)],
+    username: str = Form(...),
+    display_name: str = Form(...),
+    password: str = Form(...),
+    invite_code: str = Form(...),
+):
     if len(password) < 8:
-        return redirect("/auth/register", error="密码至少 8 位")
-    user = User(username=username.strip(), display_name=display_name.strip(), password_hash=hash_password(password), role=Role.DISTRIBUTOR.value, default_service_fee=800)
+        return redirect("/auth/register", invite=invite_code, error="密码至少 8 位")
+    code_text = invite_code.strip()
+    invitation = db.scalar(select(InvitationCode).where(
+        InvitationCode.code == code_text,
+        InvitationCode.is_active.is_(True),
+        InvitationCode.deleted_at.is_(None),
+    ))
+    if not invitation:
+        return redirect("/auth/register", invite=code_text, error="邀请码无效或已作废")
+    user = User(
+        username=username.strip(),
+        display_name=display_name.strip(),
+        password_hash=hash_password(password),
+        role=Role.DISTRIBUTOR.value,
+        default_service_fee=800,
+        invitation_code=invitation.code,
+    )
     db.add(user)
     try:
+        db.flush()
+        if invitation.used_by_id is None:
+            invitation.used_by_id = user.id
+            invitation.used_at = datetime.utcnow()
+        write_audit(db, user, "distributor.register", "user", user.id, f"邀请码 {invitation.code}")
         db.commit()
     except IntegrityError:
         db.rollback()
-        return redirect("/auth/register", error="用户名已存在")
+        return redirect("/auth/register", invite=code_text, error="用户名已存在")
     return redirect("/auth/login", message="注册成功，请登录")
 
 
@@ -174,20 +254,122 @@ def logout(request: Request):
     return redirect("/auth/login")
 
 
+@app.get("/admin", response_class=HTMLResponse)
+def admin_page(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+    period: str | None = None,
+):
+    require_grandmaster(user)
+    period = normalize_period(period or current_period())
+    distributors = distributors_for(db, user)
+    rows = []
+    for distributor in distributors:
+        people = visible_people_as_of(db, user, period, distributor.id)
+        confirmed_ids = confirmation_ids_for(db, people, period)
+        summary = dashboard_summary_from_people(people, confirmed_ids)
+        rows.append({"distributor": distributor, "summary": summary})
+    invitations = db.scalars(select(InvitationCode).order_by(InvitationCode.created_at.desc())).all()
+    invitation_usage: dict[str, list[User]] = {}
+    for distributor in distributors:
+        if distributor.invitation_code:
+            invitation_usage.setdefault(distributor.invitation_code, []).append(distributor)
+    logs = db.scalars(select(AuditLog).order_by(AuditLog.created_at.desc()).limit(80)).all()
+    return render(request, "admin.html", {
+        "user": user,
+        "period": period,
+        "prev_period": period_add(period, -1),
+        "next_period": period_add(period, 1),
+        "quick_periods": year_periods(period),
+        "rows": rows,
+        "invitations": invitations,
+        "invitation_usage": invitation_usage,
+        "logs": logs,
+    })
+
+
+@app.post("/admin/invitations")
+def create_invitation(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+    note: str | None = Form(None),
+):
+    require_grandmaster(user)
+    code = secrets.token_urlsafe(8).replace("-", "").replace("_", "")[:10].upper()
+    while db.scalar(select(InvitationCode).where(InvitationCode.code == code)):
+        code = secrets.token_urlsafe(8).replace("-", "").replace("_", "")[:10].upper()
+    invitation = InvitationCode(code=code, created_by_id=user.id, note=(note or "").strip() or None)
+    db.add(invitation)
+    write_audit(db, user, "invitation.create", "invitation", None, f"邀请码 {code}")
+    db.commit()
+    return redirect("/admin", message=f"邀请码已生成：{code}")
+
+
+@app.post("/admin/invitations/{invite_id}/delete")
+def delete_invitation(
+    invite_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+):
+    require_grandmaster(user)
+    invitation = db.get(InvitationCode, invite_id)
+    if not invitation:
+        raise HTTPException(status_code=404, detail="邀请码不存在")
+    invitation.is_active = False
+    invitation.deleted_at = datetime.utcnow()
+    write_audit(db, user, "invitation.delete", "invitation", invitation.id, f"邀请码 {invitation.code}")
+    db.commit()
+    return redirect("/admin", message="邀请码已作废")
+
+
+@app.post("/admin/distributors/{distributor_id}")
+def update_distributor(
+    distributor_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+    display_name: str = Form(...),
+    default_service_fee: float = Form(800),
+    is_active: str | None = Form(None),
+    period: str = Form(...),
+):
+    require_grandmaster(user)
+    distributor = db.get(User, distributor_id)
+    if not distributor or distributor.role != Role.DISTRIBUTOR.value:
+        raise HTTPException(status_code=404, detail="分销商不存在")
+    distributor.display_name = display_name.strip()
+    distributor.default_service_fee = default_service_fee
+    distributor.is_active = is_active == "on"
+    write_audit(db, user, "distributor.update", "user", distributor.id, f"编辑分销商 {distributor.username}")
+    db.commit()
+    return redirect("/admin", period=period, message="分销商信息已保存")
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)] = None,
     period: str | None = None,
-    owner_id: int | None = None,
+    owner_id: str | None = None,
 ):
+    owner_id = parse_optional_int(owner_id)
     period = normalize_period(period or current_period())
     people = visible_people_as_of(db, user, period, owner_id)
     active_people = [person for person in people if normalize_status(person.employment_status) == ACTIVE_STATUS]
     left_people = [person for person in people if normalize_status(person.employment_status) == LEFT_STATUS]
     confirmed_ids = confirmation_ids_for(db, people, period)
     summary = dashboard_summary_from_people(people, confirmed_ids)
+    owners = owner_options_for(db, user, owner_id)
+    people_groups = grouped_people_for_owners(owners, people, confirmed_ids, actor=user)
+    all_people_for_split = visible_people_as_of(db, user, period, None)
+    all_confirmed_ids = confirmation_ids_for(db, all_people_for_split, period)
+    own_people = [person for person in all_people_for_split if person.owner_id == user.id]
+    distributor_people = [person for person in all_people_for_split if person.owner_id != user.id]
+    own_summary = dashboard_summary_from_people(own_people, all_confirmed_ids)
+    distributor_summary = dashboard_summary_from_people(distributor_people, all_confirmed_ids)
+    confirmable_active_people = [person for person in active_people if user.role != Role.GRANDMASTER.value or person.owner_id == user.id]
     chart_data = annual_chart_data(db, user, period, owner_id)
     data_points = [item for item in chart_data if item["has_data"]]
     max_active_count = max([item["active_count"] for item in data_points] + [1])
@@ -205,8 +387,13 @@ def dashboard(
         "quick_periods": year_periods(period),
         "people": people,
         "active_people": active_people,
+        "confirmable_active_people": confirmable_active_people,
         "left_people": left_people,
+        "people_groups": people_groups,
         "summary": summary,
+        "own_summary": own_summary,
+        "distributor_summary": distributor_summary,
+        "distributor_count": len(distributors_for(db, user)) if user.role == Role.GRANDMASTER.value else 0,
         "confirmed_ids": confirmed_ids,
         "chart_data": chart_data,
         "line_points": line_points,
@@ -223,11 +410,14 @@ def me_page(
     db: Annotated[Session, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)] = None,
     period: str | None = None,
-    owner_id: int | None = None,
+    owner_id: str | None = None,
 ):
+    owner_id = parse_optional_int(owner_id)
     period = normalize_period(period or current_period())
     people = db.scalars(_all_people_query(db, user, owner_id).options(selectinload(Person.owner))).all()
-    summary = profile_summary(db, user, period, owner_id)
+    summary_owner_id = owner_id if owner_id else (user.id if user.role == Role.GRANDMASTER.value else None)
+    summary = profile_summary(db, user, period, summary_owner_id)
+    people_groups = grouped_people_for_owners(owner_options_for(db, user, owner_id), people, actor=user)
     return render(request, "me.html", {
         "user": user,
         "period": period,
@@ -236,6 +426,7 @@ def me_page(
         "quick_periods": year_periods(period),
         "summary": summary,
         "people": people,
+        "people_groups": people_groups,
         "distributors": distributors_for(db, user),
         "owner_id": owner_id,
         "export_fields": [item for item in FIELD_DEFINITIONS if item[0] != "service_fee"],
@@ -249,9 +440,10 @@ def export_center(
     db: Annotated[Session, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)] = None,
     period: str | None = None,
-    owner_id: int | None = None,
+    owner_id: str | None = None,
     download_id: int | None = None,
 ):
+    owner_id = parse_optional_int(owner_id)
     period = normalize_period(period or current_period())
     people = visible_people_as_of(db, user, period, owner_id)
     download_file = db.get(StoredFile, download_id) if download_id else None
@@ -280,8 +472,32 @@ def update_service_fee(
     if default_service_fee < 0:
         return redirect("/me", period=period, error="服务费不能小于 0")
     user.default_service_fee = default_service_fee
+    write_audit(db, user, "settings.service_fee", "user", user.id, "修改默认服务费")
     db.commit()
     return redirect("/me", period=period, message="服务费设置已保存")
+
+
+@app.post("/settings/password")
+def update_password(
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+    current_password: str = Form(...),
+    new_password: str = Form(...),
+    confirm_password: str = Form(...),
+    period: str = Form(...),
+):
+    if not verify_password(current_password, user.password_hash):
+        return redirect("/me", period=period, error="当前密码不正确")
+    if len(new_password) < 8:
+        return redirect("/me", period=period, error="新密码至少 8 位")
+    if new_password != confirm_password:
+        return redirect("/me", period=period, error="两次输入的新密码不一致")
+    if current_password == new_password:
+        return redirect("/me", period=period, error="新密码不能和当前密码相同")
+    user.password_hash = hash_password(new_password)
+    write_audit(db, user, "settings.password", "user", user.id, "修改登录密码")
+    db.commit()
+    return redirect("/me", period=period, message="密码已修改，服务器已同步保存")
 
 
 @app.get("/people/new", response_class=HTMLResponse)
@@ -398,7 +614,7 @@ def create_person(
     serial_no: str | None = Form(None),
     name: str = Form(...),
     settlement_period: str = Form(...),
-    owner_id: int | None = Form(None),
+    owner_id: str | None = Form(None),
     sfid: str | None = Form(None),
     sfid_expires_at: str | None = Form(None),
     disability_cert_id: str | None = Form(None),
@@ -432,6 +648,7 @@ def create_person(
     disability_reason: str | None = Form(None),
     note: str | None = Form(None),
 ):
+    owner_id = parse_optional_int(owner_id)
     try:
         payload = person_payload(db, user, serial_no, name, settlement_period, owner_id, sfid, sfid_expires_at, disability_cert_id, cert_issued_at, work_area, placement_period, salary_card, payroll_type, gross_pay, return_amount, employment_status, channel, household_address, household_type, contact_phone, emergency_contact, emergency_phone, emergency_relation, education, marital_status, bank_card_id, bank_name, disability_type1, disability_level1, disability_type2, disability_level2, entry_date, age, gender, disability_part, disability_reason, note)
     except ValueError as exc:
@@ -439,6 +656,8 @@ def create_person(
     person = Person(**payload)
     db.add(person)
     try:
+        db.flush()
+        write_audit(db, user, "person.create", "person", person.id, f"新增人员 {person.name}")
         db.commit()
     except IntegrityError:
         db.rollback()
@@ -458,7 +677,7 @@ def update_person(
     serial_no: str | None = Form(None),
     name: str = Form(...),
     settlement_period: str = Form(...),
-    owner_id: int | None = Form(None),
+    owner_id: str | None = Form(None),
     sfid: str | None = Form(None),
     sfid_expires_at: str | None = Form(None),
     disability_cert_id: str | None = Form(None),
@@ -496,6 +715,7 @@ def update_person(
     if not person or not can_access_person(user, person):
         raise HTTPException(status_code=404, detail="人员不存在")
     try:
+        owner_id = parse_optional_int(owner_id)
         payload = person_payload(db, user, serial_no, name, settlement_period, owner_id, sfid, sfid_expires_at, disability_cert_id, cert_issued_at, work_area, placement_period, salary_card, payroll_type, gross_pay, return_amount, employment_status, channel, household_address, household_type, contact_phone, emergency_contact, emergency_phone, emergency_relation, education, marital_status, bank_card_id, bank_name, disability_type1, disability_level1, disability_type2, disability_level2, entry_date, age, gender, disability_part, disability_reason, note, exclude_id=person_id)
     except ValueError as exc:
         return redirect(f"/people/{person_id}/edit", error=str(exc))
@@ -504,6 +724,7 @@ def update_person(
     person.monthly_confirmed = False
     person.confirmed_at = None
     try:
+        write_audit(db, user, "person.update", "person", person.id, f"编辑人员 {person.name}")
         db.commit()
     except IntegrityError:
         db.rollback()
@@ -523,6 +744,7 @@ def update_status(person_id: int, db: Annotated[Session, Depends(get_db)], user:
     person.employment_status = normalize_status(employment_status)
     person.monthly_confirmed = False
     person.confirmed_at = None
+    write_audit(db, user, "person.status", "person", person.id, f"{person.name} 状态改为 {person.employment_status}")
     db.commit()
     return redirect("/dashboard", period=normalize_period(period), message="状态已更新")
 
@@ -538,6 +760,7 @@ def delete_person(
     if not person or not can_access_person(user, person):
         raise HTTPException(status_code=404, detail="人员不存在")
     try:
+        write_audit(db, user, "person.delete", "person", person.id, f"删除人员 {person.name}")
         db.delete(person)
         db.commit()
         logger.info("用户 %s 删除人员 id=%s name=%s", user.username, person_id, person.name)
@@ -553,9 +776,10 @@ def batch_confirm(
     db: Annotated[Session, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
     period: str = Form(...),
-    owner_id: int | None = Form(None),
+    owner_id: str | None = Form(None),
     person_ids: list[int] = Form(default=[]),
 ):
+    owner_id = parse_optional_int(owner_id)
     period = normalize_period(period)
     if not person_ids:
         return redirect("/dashboard", period=period, owner_id=owner_id, error="请先勾选要核准的在职人员")
@@ -573,12 +797,15 @@ def batch_confirm(
     for person in people:
         if not can_access_person(user, person):
             continue
+        if user.role == Role.GRANDMASTER.value and person.owner_id != user.id:
+            continue
         if person.id not in visible_ids or normalize_status(person.employment_status) != ACTIVE_STATUS or not valid_person_name(person.name):
             continue
         if person.id in existing_ids:
             continue
         db.add(MonthlyConfirmation(person_id=person.id, period=period, confirmed_by_id=user.id, confirmed_at=datetime.utcnow()))
         changed += 1
+    write_audit(db, user, "confirmation.batch", "monthly_confirmation", None, f"{period} 批量核准 {changed} 人")
     db.commit()
     return redirect("/dashboard", period=period, owner_id=owner_id, message=f"已批量核准 {changed} 人")
 
@@ -593,9 +820,10 @@ async def import_excel(
     db: Annotated[Session, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
     file: UploadFile = File(...),
-    owner_id: int | None = Form(None),
+    owner_id: str | None = Form(None),
 ):
     try:
+        owner_id = parse_optional_int(owner_id)
         target_owner = user
         if user.role == Role.GRANDMASTER.value and owner_id:
             target_owner = db.get(User, owner_id)
@@ -605,6 +833,8 @@ async def import_excel(
         db.add(StoredFile(owner_id=user.id, file_type="upload", original_name=file.filename, stored_name=stored_name, path=str(path)))
         db.commit()
         created = import_people_from_xlsx(db, path, target_owner, user)
+        write_audit(db, user, "people.import", "user", target_owner.id, f"导入 {created} 条，文件 {file.filename}")
+        db.commit()
         return redirect(f"/me?period={current_period()}&message=导入完成：{created} 条")
     except Exception as exc:
         logger.exception("上传导入失败")
@@ -616,11 +846,12 @@ def export_excel(
     db: Annotated[Session, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
     period: str | None = None,
-    owner_id: int | None = None,
+    owner_id: str | None = None,
     fields: list[str] | None = Query(default=None),
     person_ids: list[int] | None = Query(default=None),
 ):
     try:
+        owner_id = parse_optional_int(owner_id)
         period = normalize_period(period or current_period())
         if not person_ids:
             return redirect("/export-center", period=period, error="请先勾选需要导出的人员")
@@ -641,11 +872,12 @@ def create_excel_export(
     db: Annotated[Session, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
     period: str | None = None,
-    owner_id: int | None = None,
+    owner_id: str | None = None,
     fields: list[str] | None = Query(default=None),
     person_ids: list[int] | None = Query(default=None),
 ):
     try:
+        owner_id = parse_optional_int(owner_id)
         period = normalize_period(period or current_period())
         if not person_ids:
             return redirect("/me", period=period, error="请先勾选需要导出的人员")
@@ -669,10 +901,11 @@ def export_word(
     db: Annotated[Session, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
     period: str | None = None,
-    owner_id: int | None = None,
+    owner_id: str | None = None,
     person_ids: list[int] | None = Query(default=None),
 ):
     try:
+        owner_id = parse_optional_int(owner_id)
         period = normalize_period(period or current_period())
         if not person_ids:
             return redirect("/export-center", period=period, error="请先勾选需要导出的人员")
@@ -693,11 +926,12 @@ def create_word_export(
     db: Annotated[Session, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
     period: str | None = None,
-    owner_id: int | None = None,
+    owner_id: str | None = None,
     person_ids: list[int] | None = Query(default=None),
     fields: list[str] | None = Query(default=None),
 ):
     try:
+        owner_id = parse_optional_int(owner_id)
         period = normalize_period(period or current_period())
         if not person_ids:
             return redirect("/me", period=period, error="请先勾选需要导出的人员")
@@ -726,11 +960,19 @@ def download_file(file_id: int, db: Annotated[Session, Depends(get_db)], user: A
         raise HTTPException(status_code=404, detail="文件已不存在")
     if path.suffix.lower() == ".docx":
         media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        filename = "个人信息.docx"
+        filename = record.stored_name or "个人信息.docx"
     else:
         media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        filename = path.name
-    return FileResponse(path, filename=filename, media_type=media_type)
+        filename = record.stored_name or path.name
+    return FileResponse(
+        path,
+        filename=filename,
+        media_type=media_type,
+        headers={
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+        },
+    )
 
 
 @app.get("/template.xlsx")

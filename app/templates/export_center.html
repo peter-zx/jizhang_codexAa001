@@ -1,10 +1,21 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="hero-card">
+<section class="hero-card export-top">
   <div class="profile-card">
     <h2>导出中心</h2>
     <p>{{ period }} · 先选字段，再选人员，系统生成缓存文件后提供下载。</p>
   </div>
+
+  {% if download_file %}
+  <div class="download-ready top-download" data-auto-download="/files/{{ download_file.id }}">
+    <div>
+      <strong>{{ message or "导出文件已生成" }}</strong>
+      <p>{{ download_file.stored_name }}</p>
+    </div>
+    <a class="primary-link" href="/files/{{ download_file.id }}" download>立即下载</a>
+    <button type="button" class="secondary-btn path-btn" data-path="{{ download_path or '' }}">查看路径</button>
+  </div>
+  {% endif %}
 </section>
 
 <form method="get" id="export-center-form">
@@ -78,23 +89,22 @@
   </section>
 
   <section class="settings-card export-workbench">
-    <h3>3. 处理数据并下载</h3>
-    <p>点击后系统会先生成文件，再在这里显示下载入口。</p>
+    <h3>3. 处理数据</h3>
+    <p>点击后系统先生成文件，完成后下载入口会显示在页面顶部。</p>
     <div class="export-error" id="export-error" hidden></div>
-    {% if download_file %}
-    <div class="download-ready">
-      <h3>导出文件已生成</h3>
-      <p>{{ download_file.stored_name }}</p>
-      <a href="/files/{{ download_file.id }}" download>当前窗口下载</a>
-      <p class="file-path">本地文件路径：{{ download_path }}</p>
-    </div>
-    {% endif %}
     <div class="export-buttons">
-      <button type="submit" id="export-xlsx" formaction="/exports/create" disabled>处理并导出表格</button>
-      <button type="submit" id="export-word" formaction="/exports/word/create" disabled>处理并导出 Word</button>
+      <button type="submit" id="export-xlsx" formaction="/exports/create" disabled>生成表格</button>
+      <button type="submit" id="export-word" formaction="/exports/word/create" disabled>生成 Word</button>
     </div>
   </section>
 </form>
+
+<dialog class="path-dialog" id="path-dialog">
+  <h3>文件位置</h3>
+  <p>服务器已生成文件。浏览器下载位置由浏览器设置决定。</p>
+  <code id="path-dialog-text"></code>
+  <button type="button" class="secondary-btn" onclick="document.getElementById('path-dialog').close()">关闭</button>
+</dialog>
 
 <script>
   (function () {
@@ -155,6 +165,27 @@
       }
       buttons.forEach(button => button.disabled = true);
       state.textContent = `正在处理数据：${count.people} 人 · ${count.fields} 个字段`;
+    });
+
+    const ready = document.querySelector("[data-auto-download]");
+    if (ready) {
+      const downloadUrl = ready.dataset.autoDownload;
+      window.setTimeout(() => {
+        const link = document.createElement("a");
+        link.href = downloadUrl;
+        link.download = "";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      }, 350);
+    }
+
+    document.querySelectorAll("[data-path]").forEach(button => {
+      button.addEventListener("click", () => {
+        const dialog = document.getElementById("path-dialog");
+        document.getElementById("path-dialog-text").textContent = button.dataset.path || "服务器路径不可用";
+        dialog.showModal();
+      });
     });
     update();
   })();

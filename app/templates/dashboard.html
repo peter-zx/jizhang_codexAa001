@@ -20,9 +20,10 @@
   <form class="owner-filter" method="get" action="/dashboard">
     <input type="hidden" name="period" value="{{ period }}">
     <label>
-      <span>分销商</span>
+      <span>查看组</span>
       <select name="owner_id" onchange="this.form.submit()">
-        <option value="">全部分销商</option>
+        <option value="">全部组</option>
+        <option value="{{ user.id }}" {% if owner_id == user.id %}selected{% endif %}>总舵组</option>
         {% for distributor in distributors %}
         <option value="{{ distributor.id }}" {% if owner_id == distributor.id %}selected{% endif %}>{{ distributor.display_name }}</option>
         {% endfor %}
@@ -46,6 +47,13 @@
     <span>离职 {{ summary.left_count }}</span>
     <span>待核准 {{ summary.pending_count }}</span>
     <span>已核准 {{ summary.confirmed_count }}</span>
+    {% if user.role == "grandmaster" %}
+    <span>分销商数量 {{ distributor_count }}</span>
+    {% endif %}
+    {% if user.role == "grandmaster" and not owner_id %}
+    <span>总舵应返 {{ "%.2f"|format(own_summary.return_amount) }}</span>
+    <span>分销商应返 {{ "%.2f"|format(distributor_summary.return_amount) }}</span>
+    {% endif %}
   </div>
 </section>
 
@@ -119,48 +127,50 @@
 <section class="section-title">
   <div>
     <h2>本月回收确认</h2>
-    <p>勾选在职人员后批量核准，离职资料只折叠展示。</p>
+    <p>总舵主只能核准总舵组人员，分销商组只展示完成进度。</p>
   </div>
 </section>
 
 <div class="confirm-list">
-  <section class="person-list">
-    {% for item in active_people %}
-    <article class="person-card compact-person {{ 'confirmed' if item.id in confirmed_ids else '' }}">
-      <div class="person-line">
-        <label class="check-wrap" aria-label="选择 {{ item.name }}">
-          <input type="checkbox" form="bulk-confirm" name="person_ids" value="{{ item.id }}" {% if item.id in confirmed_ids %}disabled{% endif %}>
-        </label>
-        <span class="line-name">{{ item.name }}</span>
-        <span>{{ item.work_area or "未填地区" }}</span>
-        <span>应发 {{ "%.0f"|format(item.gross_pay) }}</span>
-        <span>应返 {{ "%.0f"|format(item.return_amount) }}</span>
-        <span class="{{ 'ok-text' if item.id in confirmed_ids else 'warn-text' }}">{{ "已核准" if item.id in confirmed_ids else "待核准" }}</span>
-      </div>
-    </article>
-    {% else %}
-    <div class="empty-state">
-      <h3>本月暂无在职人员</h3>
-      <p>人员资料会保留，只有在职状态才进入金额和核准统计。</p>
-    </div>
-    {% endfor %}
-  </section>
-
-  {% if left_people %}
-  <details class="left-summary-card">
+  {% for group in people_groups %}
+  <details class="group-panel" {% if group.can_confirm and group.active_people %}open{% endif %}>
     <summary>
-      <span>离职合计</span>
-      <strong>{{ left_people|length }}</strong>
+      <span>{{ group.label }}</span>
+      <b>核准 {{ group.summary.confirmed_count }}/{{ group.summary.active_count }} · 在职 {{ group.summary.active_count }} · 应返 {{ "%.0f"|format(group.summary.return_amount) }}</b>
     </summary>
-    <div class="left-people-grid">
-      {% for item in left_people %}
-      <span>{{ item.name }}</span>
+    {% if user.role == "grandmaster" and not group.can_confirm %}
+    <div class="group-note">仅查看：分销商人员需要由该分销商账号核准。</div>
+    {% endif %}
+    <section class="person-list">
+      {% for item in group.active_people %}
+      <article class="person-card compact-person {{ 'confirmed' if item.id in confirmed_ids else '' }}">
+        <div class="person-line">
+          <label class="check-wrap" aria-label="选择 {{ item.name }}">
+            <input type="checkbox" form="bulk-confirm" name="person_ids" value="{{ item.id }}" {% if item.id in confirmed_ids or not group.can_confirm %}disabled{% endif %}>
+          </label>
+          <span class="line-name">{{ item.name }}</span>
+          <span>{{ item.work_area or "未填地区" }}</span>
+          <span>应发 {{ "%.0f"|format(item.gross_pay) }}</span>
+          <span>应返 {{ "%.0f"|format(item.return_amount) }}</span>
+          <span class="{{ 'ok-text' if item.id in confirmed_ids else 'warn-text' }}">{{ "已核准" if item.id in confirmed_ids else "待核准" }}</span>
+        </div>
+      </article>
+      {% else %}
+      <div class="empty-state"><h3>本组暂无在职人员</h3></div>
       {% endfor %}
-    </div>
+    </section>
+    {% if group.left_people %}
+    <details class="left-summary-card">
+      <summary><span>离职合计</span><strong>{{ group.left_people|length }}</strong></summary>
+      <div class="left-people-grid">
+        {% for item in group.left_people %}<span>{{ item.name }}</span>{% endfor %}
+      </div>
+    </details>
+    {% endif %}
   </details>
-  {% endif %}
+  {% endfor %}
 
-  {% if active_people %}
+  {% if confirmable_active_people %}
   <div class="bulk-bar">
     <button type="button" class="secondary-btn" onclick="document.querySelectorAll('input[name=person_ids]:not(:disabled)').forEach(item => item.checked = true)">全选待核准</button>
     <form id="bulk-confirm" method="post" action="/confirmations">

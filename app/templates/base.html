@@ -26,7 +26,7 @@
   </main>
 
   {% if user %}
-  <nav class="tabbar" aria-label="主导航">
+  <nav class="tabbar {{ 'gm-tabs' if user.role == 'grandmaster' else '' }}" aria-label="主导航">
     <a href="/dashboard" class="{{ 'active' if request.url.path == '/dashboard' else '' }}">
       <span>⌂</span>
       <b>主页</b>
@@ -43,6 +43,12 @@
       <span>☻</span>
       <b>我的</b>
     </a>
+    {% if user.role == "grandmaster" %}
+    <a href="/admin" class="{{ 'active' if request.url.path == '/admin' else '' }}">
+      <span>⚙</span>
+      <b>管理</b>
+    </a>
+    {% endif %}
   </nav>
   {% endif %}
 </body>

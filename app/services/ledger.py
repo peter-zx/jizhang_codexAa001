@@ -82,12 +82,14 @@ def _apply_scope(stmt, user: User, owner_id: int | None):
 
 def person_start_period(person: Person) -> str:
     """The month when a person starts participating in monthly snapshots."""
-    if person.settlement_period:
-        return normalize_period(person.settlement_period)
     if person.entry_date:
         parsed = normalize_period(person.entry_date)
         if re.fullmatch(r"20\d{2}-\d{2}", parsed):
             return parsed
+    if person.created_at:
+        return person.created_at.strftime("%Y-%m")
+    if person.settlement_period:
+        return normalize_period(person.settlement_period)
     return current_period()
 
 
@@ -227,10 +229,11 @@ def annual_chart_data(db: Session, user: User, period: str, owner_id: int | None
         item_period = f"{selected_year:04d}-{month:02d}"
         if month <= cutoff_month:
             summary = dashboard_summary(db, user, item_period, owner_id)
+            has_data = summary["total_count"] > 0
             data.append({
                 "period": item_period,
                 "label": f"{month}月",
-                "has_data": True,
+                "has_data": has_data,
                 "total_count": summary["total_count"],
                 "active_count": summary["active_count"],
                 "left_count": summary["left_count"],
