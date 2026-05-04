@@ -9,10 +9,10 @@
   <section class="form-section">
     <h3>基础身份</h3>
     <div class="form-grid-2">
-      {% if user.role == "grandmaster" %}
+      {% if user.role == "grandmaster" or user.role == "assistant" %}
       <label>归属分销商
         <select name="owner_id" required>
-          {% for distributor in distributors %}
+          {% for distributor in owner_choices %}
           <option value="{{ distributor.id }}" {% if person and person.owner_id == distributor.id %}selected{% endif %}>{{ distributor.display_name }}</option>
           {% endfor %}
         </select>

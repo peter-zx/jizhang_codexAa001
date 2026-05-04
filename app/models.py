@@ -10,6 +10,7 @@ from app.database import Base
 class Role(str, Enum):
     GRANDMASTER = "grandmaster"
     DISTRIBUTOR = "distributor"
+    ASSISTANT = "assistant"
 
 
 class User(Base):
@@ -23,6 +24,9 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     default_service_fee: Mapped[float] = mapped_column(Float, default=800)
     invitation_code: Mapped[str | None] = mapped_column(String(64), index=True)
+    parent_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    permissions: Mapped[str | None] = mapped_column(Text)
+    allowed_owner_ids: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     people: Mapped[list["Person"]] = relationship(back_populates="owner")
@@ -100,6 +104,22 @@ class MonthlyConfirmation(Base):
     period: Mapped[str] = mapped_column(String(7), index=True, nullable=False)
     confirmed_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
     confirmed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class BlacklistEntry(Base):
+    __tablename__ = "blacklist_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), index=True, nullable=False)
+    sfid: Mapped[str | None] = mapped_column(String(100), index=True)
+    disability_cert_id: Mapped[str | None] = mapped_column(String(100), index=True)
+    reason: Mapped[str | None] = mapped_column(Text)
+    source_person_id: Mapped[int | None] = mapped_column(ForeignKey("people.id"), index=True)
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    lifted_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    lifted_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
 class InvitationCode(Base):

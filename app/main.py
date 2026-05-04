@@ -1,4 +1,5 @@
 import logging
+import json
 import secrets
 from datetime import datetime
 from pathlib import Path
@@ -15,7 +16,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import BASE_DIR, settings, setup_logging
 from app.database import Base, SessionLocal, engine, get_db
-from app.models import AuditLog, InvitationCode, MonthlyConfirmation, Person, Role, StoredFile, User
+from app.models import AuditLog, BlacklistEntry, InvitationCode, MonthlyConfirmation, Person, Role, StoredFile, User
 from app.security import get_current_user, hash_password, verify_password
 from app.services.excel import DEFAULT_EXPORT_FIELDS, FIELD_DEFINITIONS, create_template_xlsx, export_people_to_xlsx, import_people_from_xlsx
 from app.services.ledger import (
@@ -73,6 +74,12 @@ def ensure_schema() -> None:
             conn.execute(text("ALTER TABLE users ADD COLUMN default_service_fee FLOAT DEFAULT 800"))
         if "invitation_code" not in user_columns:
             conn.execute(text("ALTER TABLE users ADD COLUMN invitation_code VARCHAR(64)"))
+        if "parent_id" not in user_columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN parent_id INTEGER"))
+        if "permissions" not in user_columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN permissions TEXT"))
+        if "allowed_owner_ids" not in user_columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN allowed_owner_ids TEXT"))
 
 
 @app.on_event("startup")
@@ -121,13 +128,62 @@ def parse_optional_int(value: object | None) -> int | None:
     return int(text_value)
 
 
+ASSISTANT_PERMISSION_KEYS = {
+    "people": "人员新增编辑删除",
+    "import": "导入表格",
+    "export": "导出文件",
+    "blacklist": "黑名单操作",
+    "confirm": "回收核准",
+}
+
+
+def assistant_allowed_owner_ids(user: User) -> set[int]:
+    ids = set()
+    for raw_id in str(user.allowed_owner_ids or "").split(","):
+        raw_id = raw_id.strip()
+        if raw_id.isdigit():
+            ids.add(int(raw_id))
+    return ids
+
+
+def assistant_permissions(user: User) -> set[str]:
+    try:
+        data = json.loads(user.permissions or "[]")
+    except json.JSONDecodeError:
+        data = []
+    return {str(item) for item in data}
+
+
+def has_permission(user: User, permission: str) -> bool:
+    if user.role in {Role.GRANDMASTER.value, Role.DISTRIBUTOR.value}:
+        return True
+    if user.role == Role.ASSISTANT.value:
+        return permission in assistant_permissions(user)
+    return False
+
+
+def can_view_owner(user: User, owner_id: int) -> bool:
+    if user.role == Role.GRANDMASTER.value:
+        return True
+    if user.role == Role.DISTRIBUTOR.value:
+        return owner_id == user.id
+    if user.role == Role.ASSISTANT.value:
+        return owner_id in assistant_allowed_owner_ids(user)
+    return False
+
+
 def can_access_person(user: User, person: Person) -> bool:
-    return user.role == Role.GRANDMASTER.value or person.owner_id == user.id
+    return can_view_owner(user, person.owner_id)
 
 
 def require_grandmaster(user: User) -> None:
     if user.role != Role.GRANDMASTER.value:
         raise HTTPException(status_code=403, detail="只有总舵主可以操作")
+
+
+def require_permission(user: User, permission: str) -> None:
+    if not has_permission(user, permission):
+        raise HTTPException(status_code=403, detail="当前账号没有该操作权限")
 
 
 def write_audit(db: Session, actor: User | None, action: str, target_type: str | None = None, target_id: int | None = None, detail: str | None = None) -> None:
@@ -141,14 +197,28 @@ def write_audit(db: Session, actor: User | None, action: str, target_type: str |
 
 
 def distributors_for(db: Session, user: User):
-    if user.role != Role.GRANDMASTER.value:
+    if user.role not in {Role.GRANDMASTER.value, Role.ASSISTANT.value}:
         return []
-    return db.scalars(select(User).where(User.role == Role.DISTRIBUTOR.value).order_by(User.display_name)).all()
+    stmt = select(User).where(User.role == Role.DISTRIBUTOR.value)
+    if user.role == Role.ASSISTANT.value:
+        allowed_ids = assistant_allowed_owner_ids(user)
+        if not allowed_ids:
+            return []
+        stmt = stmt.where(User.id.in_(allowed_ids))
+    return db.scalars(stmt.order_by(User.display_name)).all()
 
 
 def owner_options_for(db: Session, user: User, owner_id: int | None = None) -> list[User]:
-    if user.role != Role.GRANDMASTER.value:
+    if user.role == Role.DISTRIBUTOR.value:
         return [user]
+    if user.role == Role.ASSISTANT.value:
+        allowed_ids = assistant_allowed_owner_ids(user)
+        if owner_id:
+            if owner_id not in allowed_ids:
+                return []
+            owner = db.get(User, owner_id)
+            return [owner] if owner else []
+        return db.scalars(select(User).where(User.id.in_(allowed_ids)).order_by(User.role, User.display_name)).all() if allowed_ids else []
     if owner_id:
         owner = db.get(User, owner_id)
         return [owner] if owner else []
@@ -167,7 +237,15 @@ def grouped_people_for_owners(owners: list[User], people: list[Person], confirme
             "active_people": [person for person in owner_people if normalize_status(person.employment_status) == ACTIVE_STATUS],
             "left_people": [person for person in owner_people if normalize_status(person.employment_status) == LEFT_STATUS],
             "summary": dashboard_summary_from_people(owner_people, confirmed_ids),
-            "can_confirm": (actor.role != Role.GRANDMASTER.value if actor else True) or (actor is not None and owner.id == actor.id),
+            "can_confirm": (
+                bool(actor)
+                and has_permission(actor, "confirm")
+                and (
+                    actor.role == Role.DISTRIBUTOR.value
+                    or (actor.role == Role.GRANDMASTER.value and owner.id == actor.id)
+                    or (actor.role == Role.ASSISTANT.value and owner.id in assistant_allowed_owner_ids(actor))
+                )
+            ),
         })
     return groups
 
@@ -179,6 +257,42 @@ def duplicate_identifier(db: Session, field: str, value: str | None, exclude_id:
     if exclude_id:
         stmt = stmt.where(Person.id != exclude_id)
     return db.scalar(stmt) is not None
+
+
+def clean_text(value: object | None) -> str:
+    return str(value or "").strip()
+
+
+def active_blacklist_for_identity(db: Session, name: str | None, sfid: str | None, disability_cert_id: str | None) -> BlacklistEntry | None:
+    name_key = clean_text(name)
+    sfid_key = clean_text(sfid)
+    cert_key = clean_text(disability_cert_id)
+    if not name_key:
+        return None
+    entries = db.scalars(
+        select(BlacklistEntry).where(
+            BlacklistEntry.is_active.is_(True),
+            BlacklistEntry.name == name_key,
+        )
+    ).all()
+    for entry in entries:
+        entry_sfid = clean_text(entry.sfid)
+        entry_cert = clean_text(entry.disability_cert_id)
+        if sfid_key and entry_sfid and sfid_key == entry_sfid:
+            return entry
+        if cert_key and entry_cert and cert_key == entry_cert:
+            return entry
+        if not sfid_key and not cert_key and not entry_sfid and not entry_cert:
+            return entry
+    return None
+
+
+def active_blacklist_for_person(db: Session, person: Person) -> BlacklistEntry | None:
+    return active_blacklist_for_identity(db, person.name, person.sfid, person.disability_cert_id)
+
+
+def blacklisted_person_ids(db: Session, people: list[Person]) -> set[int]:
+    return {person.id for person in people if active_blacklist_for_person(db, person)}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -271,6 +385,17 @@ def admin_page(
         summary = dashboard_summary_from_people(people, confirmed_ids)
         rows.append({"distributor": distributor, "summary": summary})
     invitations = db.scalars(select(InvitationCode).order_by(InvitationCode.created_at.desc())).all()
+    assistants = db.scalars(select(User).where(User.role == Role.ASSISTANT.value).order_by(User.created_at.desc())).all()
+    assistant_rows = []
+    owner_choices = [user, *distributors]
+    for assistant in assistants:
+        allowed_ids = assistant_allowed_owner_ids(assistant)
+        assistant_rows.append({
+            "assistant": assistant,
+            "allowed_ids": allowed_ids,
+            "permissions": assistant_permissions(assistant),
+            "allowed_names": [owner.display_name for owner in owner_choices if owner.id in allowed_ids],
+        })
     invitation_usage: dict[str, list[User]] = {}
     for distributor in distributors:
         if distributor.invitation_code:
@@ -284,6 +409,9 @@ def admin_page(
         "quick_periods": year_periods(period),
         "rows": rows,
         "invitations": invitations,
+        "assistants": assistant_rows,
+        "assistant_permission_keys": ASSISTANT_PERMISSION_KEYS,
+        "owner_choices": owner_choices,
         "invitation_usage": invitation_usage,
         "logs": logs,
     })
@@ -346,6 +474,77 @@ def update_distributor(
     return redirect("/admin", period=period, message="分销商信息已保存")
 
 
+@app.post("/admin/assistants")
+def create_assistant(
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+    username: str = Form(...),
+    display_name: str = Form(...),
+    password: str = Form(...),
+    allowed_owner_ids: list[int] = Form(default=[]),
+    permissions: list[str] = Form(default=[]),
+    period: str = Form(...),
+):
+    require_grandmaster(user)
+    if len(password) < 8:
+        return redirect("/admin", period=period, error="助理密码至少 8 位")
+    valid_owner_ids = {owner.id for owner in owner_options_for(db, user)}
+    selected_owner_ids = [item for item in allowed_owner_ids if item in valid_owner_ids]
+    selected_permissions = [item for item in permissions if item in ASSISTANT_PERMISSION_KEYS]
+    assistant = User(
+        username=username.strip(),
+        display_name=display_name.strip(),
+        password_hash=hash_password(password),
+        role=Role.ASSISTANT.value,
+        is_active=True,
+        parent_id=user.id,
+        default_service_fee=0,
+        allowed_owner_ids=",".join(str(item) for item in selected_owner_ids),
+        permissions=json.dumps(selected_permissions, ensure_ascii=False),
+    )
+    db.add(assistant)
+    try:
+        db.flush()
+        write_audit(db, user, "assistant.create", "user", assistant.id, f"新建助理账号 {assistant.username}")
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        return redirect("/admin", period=period, error="助理账号名已存在")
+    return redirect("/admin", period=period, message="助理账号已创建")
+
+
+@app.post("/admin/assistants/{assistant_id}")
+def update_assistant(
+    assistant_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+    display_name: str = Form(...),
+    new_password: str | None = Form(None),
+    allowed_owner_ids: list[int] = Form(default=[]),
+    permissions: list[str] = Form(default=[]),
+    is_active: str | None = Form(None),
+    period: str = Form(...),
+):
+    require_grandmaster(user)
+    assistant = db.get(User, assistant_id)
+    if not assistant or assistant.role != Role.ASSISTANT.value:
+        raise HTTPException(status_code=404, detail="助理账号不存在")
+    valid_owner_ids = {owner.id for owner in owner_options_for(db, user)}
+    selected_owner_ids = [item for item in allowed_owner_ids if item in valid_owner_ids]
+    selected_permissions = [item for item in permissions if item in ASSISTANT_PERMISSION_KEYS]
+    assistant.display_name = display_name.strip()
+    assistant.allowed_owner_ids = ",".join(str(item) for item in selected_owner_ids)
+    assistant.permissions = json.dumps(selected_permissions, ensure_ascii=False)
+    assistant.is_active = is_active == "on"
+    if clean_text(new_password):
+        if len(clean_text(new_password)) < 8:
+            return redirect("/admin", period=period, error="新密码至少 8 位")
+        assistant.password_hash = hash_password(clean_text(new_password))
+    write_audit(db, user, "assistant.update", "user", assistant.id, f"更新助理账号 {assistant.username}")
+    db.commit()
+    return redirect("/admin", period=period, message="助理账号已保存")
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard(
     request: Request,
@@ -369,7 +568,15 @@ def dashboard(
     distributor_people = [person for person in all_people_for_split if person.owner_id != user.id]
     own_summary = dashboard_summary_from_people(own_people, all_confirmed_ids)
     distributor_summary = dashboard_summary_from_people(distributor_people, all_confirmed_ids)
-    confirmable_active_people = [person for person in active_people if user.role != Role.GRANDMASTER.value or person.owner_id == user.id]
+    confirmable_active_people = [
+        person for person in active_people
+        if has_permission(user, "confirm")
+        and (
+            user.role == Role.DISTRIBUTOR.value
+            or (user.role == Role.GRANDMASTER.value and person.owner_id == user.id)
+            or (user.role == Role.ASSISTANT.value and person.owner_id in assistant_allowed_owner_ids(user))
+        )
+    ]
     chart_data = annual_chart_data(db, user, period, owner_id)
     data_points = [item for item in chart_data if item["has_data"]]
     max_active_count = max([item["active_count"] for item in data_points] + [1])
@@ -393,7 +600,7 @@ def dashboard(
         "summary": summary,
         "own_summary": own_summary,
         "distributor_summary": distributor_summary,
-        "distributor_count": len(distributors_for(db, user)) if user.role == Role.GRANDMASTER.value else 0,
+        "distributor_count": len(distributors_for(db, user)) if user.role in {Role.GRANDMASTER.value, Role.ASSISTANT.value} else 0,
         "confirmed_ids": confirmed_ids,
         "chart_data": chart_data,
         "line_points": line_points,
@@ -418,6 +625,7 @@ def me_page(
     summary_owner_id = owner_id if owner_id else (user.id if user.role == Role.GRANDMASTER.value else None)
     summary = profile_summary(db, user, period, summary_owner_id)
     people_groups = grouped_people_for_owners(owner_options_for(db, user, owner_id), people, actor=user)
+    blacklist_ids = blacklisted_person_ids(db, people)
     return render(request, "me.html", {
         "user": user,
         "period": period,
@@ -427,6 +635,7 @@ def me_page(
         "summary": summary,
         "people": people,
         "people_groups": people_groups,
+        "blacklisted_person_ids": blacklist_ids,
         "distributors": distributors_for(db, user),
         "owner_id": owner_id,
         "export_fields": [item for item in FIELD_DEFINITIONS if item[0] != "service_fee"],
@@ -443,6 +652,8 @@ def export_center(
     owner_id: str | None = None,
     download_id: int | None = None,
 ):
+    if not has_permission(user, "export"):
+        return redirect("/dashboard", error="当前账号没有导出权限")
     owner_id = parse_optional_int(owner_id)
     period = normalize_period(period or current_period())
     people = visible_people_as_of(db, user, period, owner_id)
@@ -460,6 +671,97 @@ def export_center(
         "download_file": download_file,
         "download_path": str(Path(download_file.path)) if download_file else None,
     })
+
+
+@app.get("/blacklist", response_class=HTMLResponse)
+def blacklist_page(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)] = None,
+):
+    entries = db.scalars(
+        select(BlacklistEntry)
+        .where(BlacklistEntry.is_active.is_(True))
+        .order_by(BlacklistEntry.created_at.desc())
+    ).all()
+    creator_ids = {entry.created_by_id for entry in entries if entry.created_by_id}
+    person_ids = {entry.source_person_id for entry in entries if entry.source_person_id}
+    creators = {
+        item.id: item for item in db.scalars(select(User).where(User.id.in_(creator_ids))).all()
+    } if creator_ids else {}
+    source_people = {
+        item.id: item
+        for item in db.scalars(select(Person).where(Person.id.in_(person_ids)).options(selectinload(Person.owner))).all()
+    } if person_ids else {}
+    if user.role != Role.GRANDMASTER.value:
+        entries = [
+            entry for entry in entries
+            if entry.source_person_id
+            and entry.source_person_id in source_people
+            and can_access_person(user, source_people[entry.source_person_id])
+        ]
+    return render(request, "blacklist.html", {
+        "user": user,
+        "entries": entries,
+        "creators": creators,
+        "source_people": source_people,
+    })
+
+
+@app.post("/people/{person_id}/blacklist")
+def mark_person_blacklist(
+    person_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+    period: str = Form(...),
+    reason: str | None = Form(None),
+):
+    require_permission(user, "blacklist")
+    person = db.get(Person, person_id)
+    if not person or not can_access_person(user, person):
+        raise HTTPException(status_code=404, detail="人员不存在")
+    reason_text = clean_text(reason) or None
+    entry = active_blacklist_for_person(db, person)
+    if entry:
+        entry.reason = reason_text or entry.reason
+        entry.source_person_id = entry.source_person_id or person.id
+        entry.created_by_id = entry.created_by_id or user.id
+        message = "该人员已在黑名单中"
+    else:
+        entry = BlacklistEntry(
+            name=clean_text(person.name),
+            sfid=clean_text(person.sfid) or None,
+            disability_cert_id=clean_text(person.disability_cert_id) or None,
+            reason=reason_text,
+            source_person_id=person.id,
+            created_by_id=user.id,
+            is_active=True,
+        )
+        db.add(entry)
+        message = "已加入黑名单"
+    write_audit(db, user, "blacklist.mark", "person", person.id, f"{person.name} 加入黑名单")
+    db.commit()
+    return redirect("/me", period=normalize_period(period), message=message)
+
+
+@app.post("/blacklist/{entry_id}/lift")
+def lift_blacklist_entry(
+    entry_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+):
+    require_permission(user, "blacklist")
+    entry = db.get(BlacklistEntry, entry_id)
+    if not entry or not entry.is_active:
+        raise HTTPException(status_code=404, detail="黑名单记录不存在")
+    if user.role != Role.GRANDMASTER.value and entry.created_by_id != user.id:
+        raise HTTPException(status_code=403, detail="没有权限取消该黑名单")
+    entry.is_active = False
+    entry.lifted_by_id = user.id
+    entry.lifted_at = datetime.utcnow()
+    write_audit(db, user, "blacklist.lift", "blacklist", entry.id, f"{entry.name} 取消黑名单")
+    db.commit()
+    return redirect("/blacklist", message="已取消黑名单")
 
 
 @app.post("/settings/service-fee")
@@ -502,15 +804,19 @@ def update_password(
 
 @app.get("/people/new", response_class=HTMLResponse)
 def new_person_page(request: Request, db: Annotated[Session, Depends(get_db)], user: Annotated[User, Depends(get_current_user)] = None):
-    return render(request, "person_form.html", {"user": user, "period": current_period(), "distributors": distributors_for(db, user), "person": None})
+    if not has_permission(user, "people"):
+        return redirect("/dashboard", error="当前账号没有人员管理权限")
+    return render(request, "person_form.html", {"user": user, "period": current_period(), "distributors": distributors_for(db, user), "owner_choices": owner_options_for(db, user), "person": None})
 
 
 @app.get("/people/{person_id}/edit", response_class=HTMLResponse)
 def edit_person_page(request: Request, person_id: int, db: Annotated[Session, Depends(get_db)], user: Annotated[User, Depends(get_current_user)] = None):
+    if not has_permission(user, "people"):
+        return redirect("/me", error="当前账号没有人员管理权限")
     person = db.get(Person, person_id)
     if not person or not can_access_person(user, person):
         raise HTTPException(status_code=404, detail="人员不存在")
-    return render(request, "person_form.html", {"user": user, "period": person.settlement_period, "distributors": distributors_for(db, user), "person": person})
+    return render(request, "person_form.html", {"user": user, "period": person.settlement_period, "distributors": distributors_for(db, user), "owner_choices": owner_options_for(db, user), "person": person})
 
 
 def person_payload(
@@ -559,12 +865,21 @@ def person_payload(
     target_owner_id = user.id
     if user.role == Role.GRANDMASTER.value and owner_id:
         target_owner_id = owner_id
+    if user.role == Role.ASSISTANT.value:
+        if not has_permission(user, "people"):
+            raise ValueError("当前助理账号没有人员管理权限")
+        if not owner_id or not can_view_owner(user, owner_id):
+            raise ValueError("请选择已授权的分组")
+        target_owner_id = owner_id
     sfid = str(sfid or "").strip() or None
     disability_cert_id = str(disability_cert_id or "").strip() or None
     if duplicate_identifier(db, "sfid", sfid, exclude_id):
         raise ValueError("SFid 已存在于全局数据，请检查是否重复录入")
     if duplicate_identifier(db, "disability_cert_id", disability_cert_id, exclude_id):
         raise ValueError("残疾证ID 已存在于全局数据，请检查是否重复录入")
+    blacklist_entry = active_blacklist_for_identity(db, name, sfid, disability_cert_id)
+    if blacklist_entry and blacklist_entry.source_person_id != exclude_id:
+        raise ValueError("该人员命中黑名单，请先到黑名单页面核实后再录入")
     owner = db.get(User, target_owner_id) or user
     return {
         "owner_id": target_owner_id,
@@ -648,6 +963,7 @@ def create_person(
     disability_reason: str | None = Form(None),
     note: str | None = Form(None),
 ):
+    require_permission(user, "people")
     owner_id = parse_optional_int(owner_id)
     try:
         payload = person_payload(db, user, serial_no, name, settlement_period, owner_id, sfid, sfid_expires_at, disability_cert_id, cert_issued_at, work_area, placement_period, salary_card, payroll_type, gross_pay, return_amount, employment_status, channel, household_address, household_type, contact_phone, emergency_contact, emergency_phone, emergency_relation, education, marital_status, bank_card_id, bank_name, disability_type1, disability_level1, disability_type2, disability_level2, entry_date, age, gender, disability_part, disability_reason, note)
@@ -711,6 +1027,7 @@ def update_person(
     disability_reason: str | None = Form(None),
     note: str | None = Form(None),
 ):
+    require_permission(user, "people")
     person = db.get(Person, person_id)
     if not person or not can_access_person(user, person):
         raise HTTPException(status_code=404, detail="人员不存在")
@@ -738,6 +1055,7 @@ def update_person(
 
 @app.post("/people/{person_id}/status")
 def update_status(person_id: int, db: Annotated[Session, Depends(get_db)], user: Annotated[User, Depends(get_current_user)], employment_status: str = Form(...), period: str = Form(...)):
+    require_permission(user, "people")
     person = db.get(Person, person_id)
     if not person or not can_access_person(user, person):
         raise HTTPException(status_code=404, detail="人员不存在")
@@ -756,6 +1074,7 @@ def delete_person(
     user: Annotated[User, Depends(get_current_user)],
     period: str = Form(...),
 ):
+    require_permission(user, "people")
     person = db.get(Person, person_id)
     if not person or not can_access_person(user, person):
         raise HTTPException(status_code=404, detail="人员不存在")
@@ -779,6 +1098,7 @@ def batch_confirm(
     owner_id: str | None = Form(None),
     person_ids: list[int] = Form(default=[]),
 ):
+    require_permission(user, "confirm")
     owner_id = parse_optional_int(owner_id)
     period = normalize_period(period)
     if not person_ids:
@@ -799,6 +1119,8 @@ def batch_confirm(
             continue
         if user.role == Role.GRANDMASTER.value and person.owner_id != user.id:
             continue
+        if user.role == Role.ASSISTANT.value and person.owner_id not in assistant_allowed_owner_ids(user):
+            continue
         if person.id not in visible_ids or normalize_status(person.employment_status) != ACTIVE_STATUS or not valid_person_name(person.name):
             continue
         if person.id in existing_ids:
@@ -812,7 +1134,9 @@ def batch_confirm(
 
 @app.get("/imports", response_class=HTMLResponse)
 def import_page(request: Request, db: Annotated[Session, Depends(get_db)], user: Annotated[User, Depends(get_current_user)] = None):
-    return render(request, "import.html", {"user": user, "distributors": distributors_for(db, user)})
+    if not has_permission(user, "import"):
+        return redirect("/dashboard", error="当前账号没有导入权限")
+    return render(request, "import.html", {"user": user, "distributors": distributors_for(db, user), "owner_choices": owner_options_for(db, user)})
 
 
 @app.post("/imports")
@@ -822,13 +1146,20 @@ async def import_excel(
     file: UploadFile = File(...),
     owner_id: str | None = Form(None),
 ):
+    require_permission(user, "import")
     try:
         owner_id = parse_optional_int(owner_id)
         target_owner = user
         if user.role == Role.GRANDMASTER.value and owner_id:
             target_owner = db.get(User, owner_id)
-            if not target_owner or target_owner.role != Role.DISTRIBUTOR.value:
-                return redirect("/imports", error="请选择有效分销商")
+            if not target_owner or not can_view_owner(user, target_owner.id):
+                return redirect("/imports", error="请选择有效分组")
+        if user.role == Role.ASSISTANT.value:
+            if not owner_id or not can_view_owner(user, owner_id):
+                return redirect("/imports", error="请选择已授权的分组")
+            target_owner = db.get(User, owner_id)
+            if not target_owner:
+                return redirect("/imports", error="请选择有效分组")
         stored_name, path = await save_upload(file)
         db.add(StoredFile(owner_id=user.id, file_type="upload", original_name=file.filename, stored_name=stored_name, path=str(path)))
         db.commit()
@@ -850,6 +1181,7 @@ def export_excel(
     fields: list[str] | None = Query(default=None),
     person_ids: list[int] | None = Query(default=None),
 ):
+    require_permission(user, "export")
     try:
         owner_id = parse_optional_int(owner_id)
         period = normalize_period(period or current_period())
@@ -876,6 +1208,7 @@ def create_excel_export(
     fields: list[str] | None = Query(default=None),
     person_ids: list[int] | None = Query(default=None),
 ):
+    require_permission(user, "export")
     try:
         owner_id = parse_optional_int(owner_id)
         period = normalize_period(period or current_period())
@@ -904,6 +1237,7 @@ def export_word(
     owner_id: str | None = None,
     person_ids: list[int] | None = Query(default=None),
 ):
+    require_permission(user, "export")
     try:
         owner_id = parse_optional_int(owner_id)
         period = normalize_period(period or current_period())
@@ -930,6 +1264,7 @@ def create_word_export(
     person_ids: list[int] | None = Query(default=None),
     fields: list[str] | None = Query(default=None),
 ):
+    require_permission(user, "export")
     try:
         owner_id = parse_optional_int(owner_id)
         period = normalize_period(period or current_period())

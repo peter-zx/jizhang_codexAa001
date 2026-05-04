@@ -58,6 +58,85 @@
 
 <section class="section-title">
   <div>
+    <h2>助理账号</h2>
+    <p>助理由总舵主创建，只能看到被授权的分组和功能。</p>
+  </div>
+</section>
+
+<section class="settings-card">
+  <details open>
+    <summary>新建助理</summary>
+    <form method="post" action="/admin/assistants" class="admin-edit-form">
+      <input type="hidden" name="period" value="{{ period }}">
+      <label>登录账号<input name="username" required autocomplete="off"></label>
+      <label>显示名称<input name="display_name" required></label>
+      <label>初始密码<input name="password" type="password" required minlength="8" autocomplete="new-password"></label>
+      <div class="permission-box">
+        <strong>可见分组</strong>
+        <div class="permission-grid">
+          {% for owner in owner_choices %}
+          <label><input type="checkbox" name="allowed_owner_ids" value="{{ owner.id }}"> {{ "总舵组" if owner.role == "grandmaster" else owner.display_name }}</label>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="permission-box">
+        <strong>功能权限</strong>
+        <div class="permission-grid">
+          {% for key, label in assistant_permission_keys.items() %}
+          <label><input type="checkbox" name="permissions" value="{{ key }}"> {{ label }}</label>
+          {% endfor %}
+        </div>
+      </div>
+      <button type="submit">创建助理账号</button>
+    </form>
+  </details>
+</section>
+
+<section class="admin-list">
+  {% for row in assistants %}
+  {% set assistant = row.assistant %}
+  <article class="admin-card">
+    <div class="admin-card-head">
+      <div>
+        <h3>{{ assistant.display_name }}</h3>
+        <p>{{ assistant.username }} · {{ "启用" if assistant.is_active else "停用" }} · 创建 {{ assistant.created_at.strftime("%Y-%m-%d") }}</p>
+      </div>
+    </div>
+    <p class="assistant-scope">可见：{{ row.allowed_names|join("、") if row.allowed_names else "未授权分组" }}</p>
+    <details class="quiet-settings">
+      <summary>编辑助理权限</summary>
+      <form method="post" action="/admin/assistants/{{ assistant.id }}" class="admin-edit-form">
+        <input type="hidden" name="period" value="{{ period }}">
+        <label>显示名称<input name="display_name" value="{{ assistant.display_name }}" required></label>
+        <label>重置密码<input name="new_password" type="password" minlength="8" placeholder="不填写则不修改"></label>
+        <label class="check-line"><input name="is_active" type="checkbox" {% if assistant.is_active %}checked{% endif %}>账号启用</label>
+        <div class="permission-box">
+          <strong>可见分组</strong>
+          <div class="permission-grid">
+            {% for owner in owner_choices %}
+            <label><input type="checkbox" name="allowed_owner_ids" value="{{ owner.id }}" {% if owner.id in row.allowed_ids %}checked{% endif %}> {{ "总舵组" if owner.role == "grandmaster" else owner.display_name }}</label>
+            {% endfor %}
+          </div>
+        </div>
+        <div class="permission-box">
+          <strong>功能权限</strong>
+          <div class="permission-grid">
+            {% for key, label in assistant_permission_keys.items() %}
+            <label><input type="checkbox" name="permissions" value="{{ key }}" {% if key in row.permissions %}checked{% endif %}> {{ label }}</label>
+            {% endfor %}
+          </div>
+        </div>
+        <button type="submit">保存助理设置</button>
+      </form>
+    </details>
+  </article>
+  {% else %}
+  <div class="empty-state"><h3>暂无助理账号</h3><p>可以由总舵主创建给内部人员使用。</p></div>
+  {% endfor %}
+</section>
+
+<section class="section-title">
+  <div>
     <h2>邀请码</h2>
     <p>同一个邀请码可以多人使用；系统会记录每个使用它注册的分销商。</p>
   </div>
@@ -108,7 +187,7 @@
 <details class="settings-card log-collapsible">
   <summary>
     <span>操作日志</span>
-    <b>新增、编辑、删除、注册、邀请码等关键动作</b>
+    <b>新增、编辑、删除、注册、邀请码、助理权限等关键动作</b>
   </summary>
   <div class="compact-log-list">
     {% for log in logs %}

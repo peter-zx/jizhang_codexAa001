@@ -10,10 +10,10 @@
   <a class="download-button" href="/template.xlsx" download="人员导入模板.xlsx">下载模板</a>
 </section>
 <form method="post" action="/imports" enctype="multipart/form-data" class="mobile-form">
-  {% if user.role == "grandmaster" %}
+  {% if user.role == "grandmaster" or user.role == "assistant" %}
   <label>导入到分销商
     <select name="owner_id" required>
-      {% for distributor in distributors %}
+      {% for distributor in owner_choices %}
       <option value="{{ distributor.id }}">{{ distributor.display_name }}</option>
       {% endfor %}
     </select>

@@ -11,11 +11,11 @@
     {% if user %}
     <header class="mobile-head">
       <div>
-        <span class="eyebrow">{{ "总舵主" if user.role == "grandmaster" else "分销商" }}</span>
+        <span class="eyebrow">{% if user.role == "grandmaster" %}总舵主{% elif user.role == "assistant" %}助理{% else %}分销商{% endif %}</span>
         <h1>{{ user.display_name }}</h1>
       </div>
       {% if request.url.path == "/dashboard" %}
-      <a class="mini-action" href="/export-center?period={{ period or '' }}">导出</a>
+      <a class="mini-action" href="/blacklist">黑名单</a>
       {% endif %}
     </header>
     {% endif %}
@@ -40,7 +40,7 @@
       <b>导入</b>
     </a>
     <a href="/me" class="{{ 'active' if request.url.path == '/me' else '' }}">
-      <span>☻</span>
+      <span>☉</span>
       <b>我的</b>
     </a>
     {% if user.role == "grandmaster" %}

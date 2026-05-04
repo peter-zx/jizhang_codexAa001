@@ -20,9 +20,9 @@
   <form class="owner-filter" method="get" action="/me">
     <input type="hidden" name="period" value="{{ period }}">
     <label>
-      <span>查看组</span>
+      <span>查看分组</span>
       <select name="owner_id" onchange="this.form.submit()">
-        <option value="">全部组</option>
+        <option value="">全部分组</option>
         <option value="{{ user.id }}" {% if owner_id == user.id %}selected{% endif %}>总舵组</option>
         {% for distributor in distributors %}
         <option value="{{ distributor.id }}" {% if owner_id == distributor.id %}selected{% endif %}>{{ distributor.display_name }}</option>
@@ -63,7 +63,7 @@
 <section class="section-title">
   <div>
     <h2>人员管理</h2>
-    <p>总舵主按组管理全部人员，分销商只管理自己的人员。</p>
+    <p>按分组管理人员，黑名单会全局提醒并阻止重复录入。</p>
   </div>
   <a href="/people/new">新增</a>
 </section>
@@ -76,7 +76,7 @@
   </summary>
   <section class="manage-grid">
     {% for item in group.people %}
-    <article class="manage-card">
+    <article class="manage-card {% if item.id in blacklisted_person_ids %}blacklisted-card{% endif %}">
       <div class="manage-check">
         <span>{{ item.name }}</span>
       </div>
@@ -85,6 +85,14 @@
         <input type="hidden" name="period" value="{{ period }}">
         <button type="submit">删除</button>
       </form>
+      {% if item.id in blacklisted_person_ids %}
+      <span class="blacklist-badge">黑名单</span>
+      {% else %}
+      <form method="post" action="/people/{{ item.id }}/blacklist" class="blacklist-person-form" onsubmit="return confirm('确认将 {{ item.name }} 加入黑名单？');">
+        <input type="hidden" name="period" value="{{ period }}">
+        <button type="submit">拉黑</button>
+      </form>
+      {% endif %}
       <p>{{ item.employment_status }} · {{ item.work_area or "未填地区" }}</p>
       <p>{{ item.sfid or item.disability_cert_id or "未填证件" }}</p>
     </article>
@@ -97,6 +105,7 @@
 
 <section class="me-actions">
   <a href="/export-center?period={{ period }}{% if owner_id %}&owner_id={{ owner_id }}{% endif %}">进入导出中心</a>
+  <a href="/blacklist">查看黑名单</a>
   <a href="/dashboard?period={{ period }}{% if owner_id %}&owner_id={{ owner_id }}{% endif %}">回到主页</a>
   <a href="/imports">导入表格</a>
   <form method="post" action="/auth/logout">

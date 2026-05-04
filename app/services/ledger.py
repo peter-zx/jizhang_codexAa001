@@ -75,6 +75,17 @@ def _valid_people_filter(stmt):
 def _apply_scope(stmt, user: User, owner_id: int | None):
     if user.role == Role.DISTRIBUTOR.value:
         return stmt.where(Person.owner_id == user.id)
+    if user.role == Role.ASSISTANT.value:
+        allowed_ids = []
+        for raw_id in str(user.allowed_owner_ids or "").split(","):
+            raw_id = raw_id.strip()
+            if raw_id.isdigit():
+                allowed_ids.append(int(raw_id))
+        if owner_id and owner_id in allowed_ids:
+            return stmt.where(Person.owner_id == owner_id)
+        if allowed_ids:
+            return stmt.where(Person.owner_id.in_(allowed_ids))
+        return stmt.where(Person.owner_id == -1)
     if owner_id:
         return stmt.where(Person.owner_id == owner_id)
     return stmt

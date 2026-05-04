@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="section-title">
+  <div>
+    <h2>黑名单</h2>
+    <p>这里显示当前被标记为不可用的人员，按姓名 + SFid 或残疾证ID 全局命中。</p>
+  </div>
+  <a href="/me">返回</a>
+</section>
+
+<section class="blacklist-list">
+  {% for entry in entries %}
+  {% set source = source_people.get(entry.source_person_id) if entry.source_person_id else None %}
+  {% set creator = creators.get(entry.created_by_id) if entry.created_by_id else None %}
+  <article class="blacklist-card">
+    <div class="blacklist-card-head">
+      <div>
+        <h3>{{ entry.name }}</h3>
+        <p>{{ entry.sfid or "未填 SFid" }} · {{ entry.disability_cert_id or "未填残疾证ID" }}</p>
+      </div>
+      <span>黑名单</span>
+    </div>
+    <div class="blacklist-meta">
+      <span>来源：{{ source.owner.display_name if source and source.owner else "手动标记" }}</span>
+      <span>标记人：{{ creator.display_name if creator else "未知" }}</span>
+      <span>时间：{{ entry.created_at.strftime("%Y-%m-%d %H:%M") if entry.created_at else "-" }}</span>
+    </div>
+    {% if entry.reason %}
+    <p class="blacklist-reason">{{ entry.reason }}</p>
+    {% endif %}
+    {% if user.role == "grandmaster" or entry.created_by_id == user.id %}
+    <form method="post" action="/blacklist/{{ entry.id }}/lift" onsubmit="return confirm('确认取消 {{ entry.name }} 的黑名单标记？');">
+      <button type="submit">取消黑名单</button>
+    </form>
+    {% endif %}
+  </article>
+  {% else %}
+  <div class="empty-state">
+    <h3>暂无黑名单人员</h3>
+    <p>可以在“我的 > 人员管理”中对具体人员进行标记。</p>
+    <a class="primary-link" href="/me">去人员管理</a>
+  </div>
+  {% endfor %}
+</section>
+{% endblock %}

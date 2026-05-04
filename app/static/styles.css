@@ -1060,6 +1060,40 @@ button { cursor: pointer; }
   font-size: 12px;
   font-weight: 800;
 }
+.blacklist-person-form {
+  position: absolute;
+  top: 42px;
+  right: 8px;
+  margin: 0;
+}
+.blacklist-person-form button {
+  min-width: 38px;
+  min-height: 28px;
+  border: 0;
+  border-radius: 7px;
+  background: #fffaeb;
+  color: #b54708;
+  font-size: 12px;
+  font-weight: 800;
+}
+.blacklisted-card {
+  border-color: #fda29b;
+  background: #fffbfa;
+}
+.blacklist-badge {
+  position: absolute;
+  top: 42px;
+  right: 8px;
+  min-height: 28px;
+  padding: 0 8px;
+  border-radius: 7px;
+  background: #fef3f2;
+  color: #b42318;
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 900;
+}
 .manage-card p {
   margin: 8px 0 0;
   color: var(--muted);
@@ -1265,6 +1299,47 @@ button { cursor: pointer; }
   color: #fff;
   font-weight: 800;
 }
+.permission-box {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+.permission-box strong {
+  font-size: 13px;
+}
+.permission-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+.permission-grid label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 7px 8px;
+  border-radius: 7px;
+  background: #fff;
+  font-size: 12px;
+  color: #344054;
+}
+.permission-grid input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--brand-2);
+}
+.assistant-scope {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: #eef6f5;
+  color: var(--brand);
+  font-size: 12px;
+  font-weight: 800;
+}
 .invite-row {
   display: grid;
   grid-template-columns: 1fr auto minmax(86px, auto);
@@ -1375,6 +1450,78 @@ button { cursor: pointer; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.blacklist-list {
+  display: grid;
+  gap: 10px;
+}
+.blacklist-card {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+}
+.blacklist-card-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.blacklist-card-head h3 {
+  margin: 0;
+  font-size: 17px;
+}
+.blacklist-card-head p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  word-break: break-all;
+}
+.blacklist-card-head span {
+  flex: 0 0 auto;
+  padding: 6px 8px;
+  border-radius: 7px;
+  background: #fef3f2;
+  color: #b42318;
+  font-size: 12px;
+  font-weight: 900;
+}
+.blacklist-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 10px;
+}
+.blacklist-meta span {
+  min-width: 0;
+  padding: 7px 8px;
+  border-radius: 7px;
+  background: #f7f9fc;
+  color: #475467;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.blacklist-reason {
+  margin: 10px 0 0;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: #fffaeb;
+  color: #93370d;
+  font-size: 13px;
+}
+.blacklist-card form {
+  margin: 10px 0 0;
+}
+.blacklist-card button {
+  width: 100%;
+  min-height: 38px;
+  border: 0;
+  border-radius: 8px;
+  background: #fef3f2;
+  color: #b42318;
+  font-weight: 900;
+}
 
 @media (min-width: 720px) {
   .app-shell { padding-top: 26px; }
@@ -1395,6 +1542,7 @@ button { cursor: pointer; }
   .left-people-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .mini-stats { grid-template-columns: repeat(3, 1fr); }
   .invite-row { grid-template-columns: 1fr; }
+  .permission-grid { grid-template-columns: 1fr; }
   .compact-log-row { grid-template-columns: 1fr; }
   .top-download { grid-template-columns: 1fr; }
 }
